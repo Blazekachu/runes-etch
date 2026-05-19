@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useEtchStore } from '@/store/etchStore';
+import { useBuilderStore } from '@/store/builderStore';
 import { getTxConfirmations, bitcoinNetworkForAddress, setMempoolNetwork, fetchFeeRates } from '@/lib/api/mempool';
 import { setOrdinalsTestnet } from '@/lib/api/ordinals';
 import { connectWallet, getActiveProvider } from '@/lib/wallet/xverse';
@@ -24,30 +24,36 @@ function mempoolTxUrl(address: string): string {
   return 'https://mempool.space/tx';
 }
 
-export default function WaitingRoom({ onNext }: { onNext: () => void; onBack?: () => void }) {
-  const commitState = useEtchStore((s) => s.commitState);
-  const updateCommitConfirmations = useEtchStore((s) => s.updateCommitConfirmations);
-  const vanityConfig = useEtchStore((s) => s.vanityConfig);
-  const setVanityConfig = useEtchStore((s) => s.setVanityConfig);
-  const vanityProgress = useEtchStore((s) => s.vanityProgress);
-  const etchMode = useEtchStore((s) => s.etchMode);
-  const etching = useEtchStore((s) => s.etching);
-  const wallet = useEtchStore((s) => s.wallet);
-  const inscriptionFile = useEtchStore((s) => s.inscriptionFile);
-  const parentInscription = useEtchStore((s) => s.parentInscription);
-  const bundleDownloaded = useEtchStore((s) => s.bundleDownloaded);
-  const delegateInscriptionId = useEtchStore((s) => s.delegateInscriptionId);
-  const setBundleDownloaded = useEtchStore((s) => s.setBundleDownloaded);
-  const setVanityProgress = useEtchStore((s) => s.setVanityProgress);
-  const setVanityLocktime = useEtchStore((s) => s.setVanityLocktime);
-  const selectedFeeRate = useEtchStore((s) => s.selectedFeeRate);
-  const setSelectedFeeRate = useEtchStore((s) => s.setSelectedFeeRate);
-  const feeRatesFromStore = useEtchStore((s) => s.feeRates);
-  const setFeeRatesStore = useEtchStore((s) => s.setFeeRates);
-  const getChangeAddress = useEtchStore((s) => s.changeAddress);
+export default function WaitingPhase() {
+  const commitState = useBuilderStore((s) => s.commitState);
+  const updateCommitConfirmations = useBuilderStore((s) => s.updateCommitConfirmations);
+  const vanityConfig = useBuilderStore((s) => s.vanityConfig);
+  const setVanityConfig = useBuilderStore((s) => s.setVanityConfig);
+  const vanityProgress = useBuilderStore((s) => s.vanityProgress);
+  const etching = useBuilderStore((s) => s.etching);
+  const wallet = useBuilderStore((s) => s.wallet);
+  const inscriptionFile = useBuilderStore((s) => s.inscriptionFile);
+  const delegateInscriptionId = useBuilderStore((s) => s.delegateInscriptionId);
+  const parentInscription = useBuilderStore((s) => s.parentInscription);
+  const bundleDownloaded = useBuilderStore((s) => s.bundleDownloaded);
+  const setBundleDownloaded = useBuilderStore((s) => s.setBundleDownloaded);
+  const setVanityProgress = useBuilderStore((s) => s.setVanityProgress);
+  const setVanityLocktime = useBuilderStore((s) => s.setVanityLocktime);
+  const selectedFeeRate = useBuilderStore((s) => s.selectedFeeRate);
+  const setSelectedFeeRate = useBuilderStore((s) => s.setSelectedFeeRate);
+  const feeRatesFromStore = useBuilderStore((s) => s.feeRates);
+  const setFeeRatesStore = useBuilderStore((s) => s.setFeeRates);
+  const setWallet = useBuilderStore((s) => s.setWallet);
 
-  const hasInscription = etchMode === 'full' || etchMode === 'no-parent';
-  const setWallet = useEtchStore((s) => s.setWallet);
+  // hasInscription: determined from store state, not etchMode
+  const hasInscription = !!useBuilderStore.getState().inscriptionFile || !!useBuilderStore.getState().delegateInscriptionId;
+
+  const cachedTapscriptHex = useBuilderStore((s) => s.cachedTapscriptHex);
+  const cachedControlBlockHex = useBuilderStore((s) => s.cachedControlBlockHex);
+  const cachedInternalPubkeyHex = useBuilderStore((s) => s.cachedInternalPubkeyHex);
+
+  // changeAddress is a function in builderStore
+  const getChangeAddress = useBuilderStore((s) => s.changeAddress);
 
   const [pollError, setPollError] = useState<string | null>(null);
   const [vanitySkipped, setVanitySkipped] = useState(false);
@@ -105,17 +111,14 @@ export default function WaitingRoom({ onNext }: { onNext: () => void; onBack?: (
 
   // --- Vanity grinding via nLockTime ---
   // CRITICAL: This template must produce the EXACT same TX serialization as
-  // RevealAndComplete.handleReveal(). Both must use the same tapscript, controlBlock,
+  // the reveal phase. Both must use the same tapscript, controlBlock,
   // internalPubkey, feeRate, addresses, and etching params. The only difference is
   // the locktime field which the grinder varies.
-  const cachedTapscriptHex = useEtchStore((s) => s.cachedTapscriptHex);
-  const cachedControlBlockHex = useEtchStore((s) => s.cachedControlBlockHex);
-  const cachedInternalPubkeyHex = useEtchStore((s) => s.cachedInternalPubkeyHex);
 
   const buildTxTemplate = useCallback((): { template: Uint8Array | null; error?: string } => {
     if (!commitState || !wallet.publicKey) return { template: null, error: 'Wallet not connected.' };
 
-    // Use cached tapscript data — same source RevealAndComplete will use
+    // Use cached tapscript data — same source the reveal phase will use
     const tsHex = cachedTapscriptHex;
     const cbHex = cachedControlBlockHex;
     const pkHex = cachedInternalPubkeyHex;
@@ -168,12 +171,12 @@ export default function WaitingRoom({ onNext }: { onNext: () => void; onBack?: (
         return { template: serializeForTxid(psbt) };
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Unknown error';
-        if (!msg.includes('Insufficient funds')) console.error('[WaitingRoom] buildTxTemplate failed:', err);
+        if (!msg.includes('Insufficient funds')) console.error('[WaitingPhase] buildTxTemplate failed:', err);
         return { template: null, error: msg };
       }
     }
 
-    // Use cached data — matches what RevealAndComplete will use
+    // Use cached data — matches what the reveal phase will use
     try {
       const tapscript = Buffer.from(tsHex, 'hex');
       const controlBlock = Buffer.from(cbHex, 'hex');
@@ -194,7 +197,7 @@ export default function WaitingRoom({ onNext }: { onNext: () => void; onBack?: (
       return { template: serializeForTxid(psbt) };
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      if (!msg.includes('Insufficient funds')) console.error('[WaitingRoom] buildTxTemplate failed:', err);
+      if (!msg.includes('Insufficient funds')) console.error('[WaitingPhase] buildTxTemplate failed:', err);
       return { template: null, error: msg };
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -352,11 +355,15 @@ export default function WaitingRoom({ onNext }: { onNext: () => void; onBack?: (
     }
   }
 
+  function handleProceed() {
+    useBuilderStore.getState().setPhase('reveal');
+  }
+
   const progressPct = Math.min(100, (confirmations / REQUIRED_CONFIRMATIONS) * 100);
 
   function truncateTxid(t: string) {
-    if (!t) return '—';
-    return `${t.slice(0, 10)}…${t.slice(-10)}`;
+    if (!t) return '\u2014';
+    return `${t.slice(0, 10)}\u2026${t.slice(-10)}`;
   }
 
   return (
@@ -376,7 +383,7 @@ export default function WaitingRoom({ onNext }: { onNext: () => void; onBack?: (
         </div>
         {txid && (
           <a
-            href={`${mempoolTxUrl(wallet?.paymentAddress ?? '')}/${txid}`}
+            href={`${mempoolTxUrl(wallet.taprootAddress || wallet.paymentAddress)}/${txid}`}
             target="_blank"
             rel="noopener noreferrer"
             className="shrink-0 rounded-lg border border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-400 hover:border-orange-500 hover:text-orange-400 transition-colors"
@@ -520,7 +527,7 @@ export default function WaitingRoom({ onNext }: { onNext: () => void; onBack?: (
                   <div className="flex justify-between">
                     <span className="text-gray-500">Speed</span>
                     <span className="text-gray-300">
-                      {vanityProgress.speed > 0 ? `${vanityProgress.speed.toLocaleString()} h/s` : '—'}
+                      {vanityProgress.speed > 0 ? `${vanityProgress.speed.toLocaleString()} h/s` : '\u2014'}
                     </span>
                   </div>
                   <div className="flex items-center gap-2 text-gray-500">
@@ -599,7 +606,7 @@ export default function WaitingRoom({ onNext }: { onNext: () => void; onBack?: (
             disabled={reconnecting}
             className="w-full rounded-lg bg-orange-500 hover:bg-orange-400 disabled:opacity-60 disabled:cursor-not-allowed px-4 py-2 text-sm font-semibold text-white transition-colors"
           >
-            {reconnecting ? 'Connecting…' : 'Reconnect Wallet'}
+            {reconnecting ? 'Connecting\u2026' : 'Reconnect Wallet'}
           </button>
         </div>
       )}
@@ -637,11 +644,11 @@ export default function WaitingRoom({ onNext }: { onNext: () => void; onBack?: (
       {/* Proceed button */}
       <div className="pt-2">
         <button
-          onClick={onNext}
+          onClick={handleProceed}
           disabled={!canProceed}
           className="w-full rounded-lg bg-orange-500 hover:bg-orange-400 active:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed px-6 py-2.5 font-semibold text-white transition-colors"
         >
-          {canProceed ? 'Proceed to Reveal' : `Waiting… (${confirmations}/${REQUIRED_CONFIRMATIONS} confirmations)`}
+          {canProceed ? 'Proceed to Reveal' : `Waiting\u2026 (${confirmations}/${REQUIRED_CONFIRMATIONS} confirmations)`}
         </button>
       </div>
     </div>

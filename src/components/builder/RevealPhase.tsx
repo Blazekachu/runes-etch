@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
-import { useEtchStore } from '@/store/etchStore';
+import { useBuilderStore } from '@/store/builderStore';
 import { buildRevealTx, serializeForTxid, computeTxid } from '@/lib/runes/reveal';
 import { buildTapscript, buildBareTapscript } from '@/lib/runes/inscription';
 import { runeNameToCommitmentBytes } from '@/lib/runes/names';
@@ -14,33 +14,22 @@ import type { FeeRates } from '@/types';
 
 bitcoin.initEccLib(ecc);
 
-function mempoolTxUrl(address: string): string {
-  if (address.startsWith('tb1') || address.startsWith('2') || address.startsWith('m') || address.startsWith('n')) {
-    return 'https://mempool.space/testnet4/tx';
-  }
-  return 'https://mempool.space/tx';
-}
-const ORDINALS_URL = 'https://ordinals.com/inscription';
-
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-export default function RevealAndComplete(_props?: Record<string, unknown>) {
-  const etching = useEtchStore((s) => s.etching);
-  const etchMode = useEtchStore((s) => s.etchMode);
-  const wallet = useEtchStore((s) => s.wallet);
-  const commitState = useEtchStore((s) => s.commitState);
-  const parentInscription = useEtchStore((s) => s.parentInscription);
+export default function RevealPhase(_props?: Record<string, unknown>) {
+  const etching = useBuilderStore((s) => s.etching);
+  const wallet = useBuilderStore((s) => s.wallet);
+  const commitState = useBuilderStore((s) => s.commitState);
+  const parentInscription = useBuilderStore((s) => s.parentInscription);
+  const inscriptionFile = useBuilderStore((s) => s.inscriptionFile);
+  const delegateInscriptionId = useBuilderStore((s) => s.delegateInscriptionId);
+  const hasInscription = !!inscriptionFile || !!delegateInscriptionId;
+  const vanityLocktime = useBuilderStore((s) => s.vanityLocktime);
+  const selectedFeeRate = useBuilderStore((s) => s.selectedFeeRate);
+  const setSelectedFeeRate = useBuilderStore((s) => s.setSelectedFeeRate);
+  const setWallet = useBuilderStore((s) => s.setWallet);
+  const setRevealTxid = useBuilderStore((s) => s.setRevealTxid);
+  const setPhase = useBuilderStore((s) => s.setPhase);
 
-  const delegateInscriptionId = useEtchStore((s) => s.delegateInscriptionId);
-  const hasInscription = etchMode === 'full' || etchMode === 'no-parent';
-  const vanityProgress = useEtchStore((s) => s.vanityProgress);
-  const vanityLocktime = useEtchStore((s) => s.vanityLocktime);
-  const selectedFeeRate = useEtchStore((s) => s.selectedFeeRate);
-  const setSelectedFeeRate = useEtchStore((s) => s.setSelectedFeeRate);
-  const setWallet = useEtchStore((s) => s.setWallet);
-  const getChangeAddress = useEtchStore((s) => s.changeAddress);
-  const revealTxid = useEtchStore((s) => s.revealTxid);
-  const setRevealTxid = useEtchStore((s) => s.setRevealTxid);
-  const reset = useEtchStore((s) => s.reset);
   const [reconnecting, setReconnecting] = useState(false);
   const broadcastingRef = useRef(false);
 
@@ -116,6 +105,7 @@ export default function RevealAndComplete(_props?: Record<string, unknown>) {
   const needsReconnect = !wallet.publicKey;
 
   async function handleReveal() {
+    // Double-broadcast guard (ref-based)
     if (broadcastingRef.current) return;
     if (!etching.runeName) { setError('Rune name is empty.'); return; }
     if (!commitState) {
@@ -146,7 +136,7 @@ export default function RevealAndComplete(_props?: Record<string, unknown>) {
         throw new Error(`Commit TX only has ${confirmations}/6 confirmations. Please wait.`);
       }
 
-      // Re-resolve parent inscription UTXO — it may have moved since commit
+      // Parent re-resolution: re-resolve parent inscription UTXO — it may have moved since commit
       // Skip on testnet (ordinals.com is mainnet-only)
       const isTestnet = wallet.taprootAddress.startsWith('tb1');
       let resolvedParent = parentInscription;
@@ -164,9 +154,9 @@ export default function RevealAndComplete(_props?: Record<string, unknown>) {
         resolvedParent = parentResult.parent;
       }
 
-      // Use cached internal pubkey if available (matches what grinder used),
+      // Cached tapscript: Use cached internal pubkey if available (matches what grinder used),
       // otherwise derive from wallet public key
-      const { cachedTapscriptHex, cachedControlBlockHex, cachedInternalPubkeyHex } = useEtchStore.getState();
+      const { cachedTapscriptHex, cachedControlBlockHex, cachedInternalPubkeyHex } = useBuilderStore.getState();
       let internalPubkey: Buffer;
       if (cachedInternalPubkeyHex) {
         internalPubkey = Buffer.from(cachedInternalPubkeyHex, 'hex');
@@ -184,7 +174,7 @@ export default function RevealAndComplete(_props?: Record<string, unknown>) {
       // Build or restore tapscript + control block.
       // Use cached hex from commit/bundle — this guarantees the same data the grinder used.
       const runeCommitment = runeNameToCommitmentBytes(etching.runeName);
-      const inscriptionFile = useEtchStore.getState().inscriptionFile;
+      const currentInscriptionFile = useBuilderStore.getState().inscriptionFile;
 
       let tapscript: Uint8Array;
       let controlBlock: Buffer;
@@ -194,10 +184,10 @@ export default function RevealAndComplete(_props?: Record<string, unknown>) {
         // Use cached data from bundle — guaranteed to match the commit TX
         tapscript = Buffer.from(cachedTapscriptHex, 'hex');
         controlBlock = Buffer.from(cachedControlBlockHex, 'hex');
-      } else if (hasInscription && inscriptionFile) {
+      } else if (hasInscription && currentInscriptionFile) {
         tapscript = buildTapscript(internalPubkey, {
-          contentType: inscriptionFile.contentType,
-          body: inscriptionFile.body,
+          contentType: currentInscriptionFile.contentType,
+          body: currentInscriptionFile.body,
           parentId: resolvedParent?.inscriptionId ?? null,
           delegateId: delegateInscriptionId,
           runeCommitment,
@@ -275,7 +265,7 @@ export default function RevealAndComplete(_props?: Record<string, unknown>) {
         network: bitcoinNetworkForAddress(wallet.taprootAddress),
       });
 
-      // Verify vanity TXID matches before signing
+      // Vanity TXID verification: if vanity locktime, log expected TXID
       if (vanityLocktime && vanityLocktime > 0) {
         const expectedBytes = serializeForTxid(psbt);
         const expectedTxid = computeTxid(expectedBytes);
@@ -300,6 +290,7 @@ export default function RevealAndComplete(_props?: Record<string, unknown>) {
 
       await broadcastTx(txHex);
       setRevealTxid(txid);
+      setPhase('complete');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unknown error occurred.');
     } finally {
@@ -315,67 +306,6 @@ export default function RevealAndComplete(_props?: Record<string, unknown>) {
         : 'border-gray-700 bg-gray-900 text-gray-400 hover:border-gray-600 hover:text-white'
     }`;
 
-  // --- Success state ---
-  if (revealTxid) {
-    return (
-      <div className="flex flex-col gap-8 py-8 max-w-xl mx-auto w-full items-center text-center">
-        {/* Success icon */}
-        <div className="flex items-center justify-center w-20 h-20 rounded-full bg-green-500/15 border border-green-500/30">
-          <svg className="w-10 h-10 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-          </svg>
-        </div>
-
-        <div>
-          <h2 className="text-2xl font-bold text-white mb-2">Rune Etched!</h2>
-          <p className="text-gray-400 text-sm">
-            Your rune has been etched on Bitcoin. It may take a moment to appear on explorers.
-          </p>
-        </div>
-
-        {/* Rune name */}
-        <div className="w-full rounded-lg border border-gray-800 bg-gray-900 px-6 py-4">
-          <p className="text-xs text-gray-500 mb-1 uppercase tracking-wider">Rune Name</p>
-          <p className="font-mono text-xl font-bold text-orange-400">{etching.runeName}</p>
-        </div>
-
-        {/* Reveal TXID */}
-        <div className="w-full rounded-lg border border-gray-800 bg-gray-900 px-4 py-3">
-          <p className="text-xs text-gray-500 mb-1">Reveal TXID</p>
-          <p className="font-mono text-xs text-white break-all">{revealTxid}</p>
-        </div>
-
-        {/* Links */}
-        <div className="flex gap-3 w-full">
-          <a
-            href={`${mempoolTxUrl(wallet?.paymentAddress ?? '')}/${revealTxid}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex-1 rounded-lg border border-gray-700 px-4 py-2.5 text-sm font-semibold text-gray-300 hover:border-orange-500 hover:text-orange-400 transition-colors text-center"
-          >
-            mempool.space
-          </a>
-          <a
-            href={`${ORDINALS_URL}/${revealTxid}i0`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex-1 rounded-lg border border-gray-700 px-4 py-2.5 text-sm font-semibold text-gray-300 hover:border-orange-500 hover:text-orange-400 transition-colors text-center"
-          >
-            ordinals.com
-          </a>
-        </div>
-
-        <button
-          onClick={reset}
-          className="w-full rounded-lg border border-gray-700 px-6 py-2.5 text-sm font-semibold text-gray-300 hover:border-gray-500 hover:text-white transition-colors"
-        >
-          Etch Another Rune
-        </button>
-      </div>
-    );
-  }
-
-  // --- Pre-reveal state ---
   return (
     <div className="flex flex-col gap-8 py-8 max-w-xl mx-auto w-full">
       <div>
@@ -410,7 +340,7 @@ export default function RevealAndComplete(_props?: Record<string, unknown>) {
             disabled={loadingFees}
             className="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-40 transition-colors"
           >
-            {loadingFees ? 'Loading…' : 'Refresh'}
+            {loadingFees ? 'Loading...' : 'Refresh'}
           </button>
         </div>
 
@@ -497,7 +427,7 @@ export default function RevealAndComplete(_props?: Record<string, unknown>) {
             disabled={reconnecting}
             className="w-full rounded-lg bg-orange-500 hover:bg-orange-400 active:bg-orange-600 disabled:opacity-60 disabled:cursor-not-allowed px-6 py-2.5 font-semibold text-white transition-colors"
           >
-            {reconnecting ? 'Connecting…' : 'Reconnect Wallet'}
+            {reconnecting ? 'Connecting...' : 'Reconnect Wallet'}
           </button>
         </div>
       ) : (
@@ -506,7 +436,7 @@ export default function RevealAndComplete(_props?: Record<string, unknown>) {
           disabled={loading}
           className="w-full rounded-lg bg-orange-500 hover:bg-orange-400 active:bg-orange-600 disabled:opacity-60 disabled:cursor-not-allowed px-6 py-2.5 font-semibold text-white transition-colors"
         >
-          {loading ? 'Broadcasting reveal…' : 'Sign & Broadcast Reveal'}
+          {loading ? 'Broadcasting reveal...' : 'Sign & Broadcast Reveal'}
         </button>
       )}
     </div>

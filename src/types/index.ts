@@ -2,6 +2,10 @@
 
 export type EtchMode = 'full' | 'no-parent' | 'no-inscription' | 'quick';
 
+// --- Builder v2 Phase ---
+
+export type BuildPhase = 'building' | 'waiting' | 'reveal' | 'complete';
+
 // --- Rune Etching Types ---
 
 export interface RuneEtching {

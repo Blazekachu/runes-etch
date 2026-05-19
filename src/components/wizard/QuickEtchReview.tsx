@@ -10,7 +10,12 @@ import { broadcastTx, getCurrentBlockHeight, bitcoinNetworkForAddress } from '@/
 import { checkRuneNameAvailable } from '@/lib/api/ordinals';
 import { VanityGrinder } from '@/lib/vanity/grinder';
 
-const MEMPOOL_TX_URL = 'https://mempool.space/tx';
+function mempoolTxUrl(address: string): string {
+  if (address.startsWith('tb1') || address.startsWith('2') || address.startsWith('m') || address.startsWith('n')) {
+    return 'https://mempool.space/testnet4/tx';
+  }
+  return 'https://mempool.space/tx';
+}
 
 export default function QuickEtchReview({ onBack }: { onNext?: () => void; onBack?: () => void }) {
   const etching = useEtchStore((s) => s.etching);
@@ -219,7 +224,7 @@ export default function QuickEtchReview({ onBack }: { onNext?: () => void; onBac
         </div>
 
         <a
-          href={`${MEMPOOL_TX_URL}/${txid}`}
+          href={`${mempoolTxUrl(wallet?.paymentAddress ?? '')}/${txid}`}
           target="_blank"
           rel="noopener noreferrer"
           className="w-full rounded-lg border border-gray-700 px-4 py-2.5 text-sm font-semibold text-gray-300 hover:border-orange-500 hover:text-orange-400 transition-colors text-center"
