@@ -1,0 +1,197 @@
+/**
+ * Rune name encoding/decoding and validation.
+ * Reference: github.com/ordinals/ord — crates/ordinals/src/rune.rs
+ *
+ * Rune names use a modified bijective base-26 encoding:
+ * A=0, B=1, ..., Z=25, AA=26, AB=27, ..., AZ=51, BA=52, ...
+ *
+ * Name availability uses interpolation between STEPS boundaries,
+ * NOT a simple per-character-length threshold.
+ */
+
+const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const RUNES_ACTIVATION = 840000; // first_rune_height (mainnet, halving 4)
+const SUBSIDY_HALVING_INTERVAL = 210000;
+const UNLOCKED = 12; // number of unlock phases
+const UNLOCK_INTERVAL = SUBSIDY_HALVING_INTERVAL / UNLOCKED; // 17500
+
+/**
+ * STEPS[i] = smallest rune numeric value with (i+1) characters.
+ * From ord's Rune::STEPS constant. STEPS[0]=0 (A), STEPS[1]=26 (AA), etc.
+ * These are the bijective base-26 boundaries.
+ */
+const STEPS: bigint[] = [
+  0n,                          // 1-char:  A
+  26n,                         // 2-char:  AA
+  702n,                        // 3-char:  AAA
+  18278n,                      // 4-char:  AAAA
+  475254n,                     // 5-char:  AAAAA
+  12356630n,                   // 6-char:  AAAAAA
+  321272406n,                  // 7-char:  AAAAAAA
+  8353082582n,                 // 8-char:  AAAAAAAA
+  217180147158n,               // 9-char:  AAAAAAAAA
+  5646683826134n,              // 10-char: AAAAAAAAAA
+  146813779479510n,            // 11-char: AAAAAAAAAAA
+  3817158266467286n,           // 12-char: AAAAAAAAAAAA
+  99246114928149462n,          // 13-char: AAAAAAAAAAAAA
+];
+
+export function runeNameToU128(name: string): bigint {
+  if (name.length === 0) throw new Error('Rune name cannot be empty');
+  for (const ch of name) {
+    if (ch < 'A' || ch > 'Z') throw new Error(`Invalid rune name character: '${ch}'. Only A-Z allowed.`);
+  }
+  let value = 0n;
+  for (let i = 0; i < name.length; i++) {
+    if (i > 0) { value += 1n; value *= 26n; }
+    value += BigInt(name.charCodeAt(i) - 65);
+  }
+  return value;
+}
+
+export function u128ToRuneName(value: bigint): string {
+  if (value < 0n) throw new Error('Value must be non-negative');
+  let v = value;
+  const chars: string[] = [];
+  chars.push(ALPHABET[Number(v % 26n)]);
+  v = v / 26n;
+  while (v > 0n) {
+    v -= 1n;
+    chars.push(ALPHABET[Number(v % 26n)]);
+    v = v / 26n;
+  }
+  return chars.reverse().join('');
+}
+
+export function runeNameToCommitmentBytes(name: string): Uint8Array {
+  const value = runeNameToU128(name);
+  const bytes: number[] = [];
+  let v = value;
+  do {
+    bytes.push(Number(v & 0xffn));
+    v >>= 8n;
+  } while (v > 0n);
+  return new Uint8Array(bytes);
+}
+
+export function spacerBitmask(name: string, positions: number[]): number {
+  let mask = 0;
+  for (const pos of positions) {
+    if (pos < 0 || pos >= name.length - 1) {
+      throw new Error(`Spacer position ${pos} out of range for name "${name}" (max: ${name.length - 2})`);
+    }
+    if (pos > 30) {
+      throw new Error(`Spacer position ${pos} exceeds 32-bit bitmask limit`);
+    }
+    mask |= 1 << pos;
+  }
+  return mask;
+}
+
+/**
+ * Compute the minimum rune numeric value at a given block height.
+ * Matches ord's `Rune::minimum_at_height` exactly.
+ *
+ * Within each 17,500-block window, the minimum interpolates linearly
+ * between two STEPS boundaries. This means some short names unlock
+ * earlier than others (alphabetically later names first).
+ */
+export function minimumAtHeight(blockHeight: number): bigint {
+  // M8: +1 because the TX will be mined in the NEXT block (height+1), not the current tip
+  const offset = blockHeight + 1;
+  const start = RUNES_ACTIVATION;
+  const end = start + SUBSIDY_HALVING_INTERVAL;
+
+  if (offset < start) return STEPS[UNLOCKED];
+  if (offset >= end) return 0n;
+
+  const progress = offset - start;
+  const length = UNLOCKED - Math.floor(progress / UNLOCK_INTERVAL);
+
+  const stepEnd = STEPS[length - 1];
+  const stepStart = STEPS[length];
+  const remainder = BigInt(progress % UNLOCK_INTERVAL);
+
+  return stepStart - ((stepStart - stepEnd) * remainder / BigInt(UNLOCK_INTERVAL));
+}
+
+/**
+ * Get the minimum name character length available at a height.
+ * This is an approximation — within a window, some names of this length
+ * are available and some aren't. Use minimumAtHeight() for exact checks.
+ */
+export function minNameLengthAtHeight(blockHeight: number): number {
+  const minValue = minimumAtHeight(blockHeight);
+  // Find which character length this value falls in
+  for (let i = STEPS.length - 1; i >= 0; i--) {
+    if (minValue >= STEPS[i]) return i + 1;
+  }
+  return 1;
+}
+
+/**
+ * Compute the block height at which a specific name becomes available.
+ * This accounts for the interpolation — shorter alphabetical names
+ * within a length class unlock later than longer ones.
+ */
+export function computeUnlockHeight(name: string): number {
+  const value = runeNameToU128(name);
+  const charLen = name.length;
+
+  if (charLen > 12) {
+    // 13+ char names available from activation
+    return RUNES_ACTIVATION;
+  }
+  if (charLen < 1) return RUNES_ACTIVATION + SUBSIDY_HALVING_INTERVAL;
+
+  // Which STEPS interval does this name fall in?
+  // STEPS[charLen] = start of this char-length range
+  // STEPS[charLen - 1] = end (start of shorter range)
+  const stepStart = STEPS[charLen];
+  const stepEnd = STEPS[charLen - 1];
+
+  // The window index for this character length: UNLOCKED - charLen
+  const windowIndex = UNLOCKED - charLen;
+  const windowStart = RUNES_ACTIVATION + windowIndex * UNLOCK_INTERVAL;
+
+  if (stepStart === stepEnd) return windowStart;
+
+  // Interpolation: value = stepStart - (stepStart - stepEnd) * remainder / UNLOCK_INTERVAL
+  // Solve for remainder: remainder = (stepStart - value) * UNLOCK_INTERVAL / (stepStart - stepEnd)
+  const numerator = (stepStart - value) * BigInt(UNLOCK_INTERVAL);
+  const denominator = stepStart - stepEnd;
+  const remainder = Number(numerator / denominator);
+
+  return windowStart + Math.min(remainder, UNLOCK_INTERVAL - 1);
+}
+
+/**
+ * Validate whether a specific rune name can be etched at the given block height.
+ * Uses exact interpolation — not just character length.
+ */
+export function validateRuneName(
+  name: string,
+  currentBlockHeight: number,
+  /** Skip unlock-height check on testnet where block height is below runes activation */
+  isTestnet = false,
+): { valid: true } | { valid: false; error: string; unlockHeight?: number } {
+  if (!/^[A-Z]+$/.test(name)) return { valid: false, error: 'Rune name must contain only letters A-Z' };
+  if (name.length > 28) return { valid: false, error: 'Rune name cannot exceed 28 characters' };
+
+  // Testnet block heights are below runes activation — all names are available
+  if (isTestnet) return { valid: true };
+
+  const nameValue = runeNameToU128(name);
+  const minValue = minimumAtHeight(currentBlockHeight);
+
+  if (nameValue < minValue) {
+    const unlockHeight = computeUnlockHeight(name);
+    const minName = u128ToRuneName(minValue);
+    return {
+      valid: false,
+      error: `"${name}" unlocks at block ${unlockHeight.toLocaleString()}. Currently the minimum ${name.length}-letter name is "${minName}".`,
+      unlockHeight,
+    };
+  }
+  return { valid: true };
+}
