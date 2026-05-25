@@ -73,23 +73,25 @@ export default function RuneDetailsSection() {
     setSpacerPositions(positions);
   }, [etching.spacers]);
 
-  // Sync TO store on user edits. Gated on phase + equality guard: when phase !== 'building' the
-  // section is locked; when local matches store there's nothing to write. The guard kills the
-  // sync-from-store → setSpacerPositions(newArrayRef) → sync-back feedback loop dead.
+  // Sync TO store on user edits. Gated on phase + equality guard.
+  // Why: keeping `etching` out of deps prevents sync-back from re-firing every time
+  // ANY section writes etching (which creates a new etching ref). The equality guard
+  // reads etching via getState() so we still avoid redundant writes.
   useEffect(() => {
     if (phase !== 'building') return;
+    const current = useBuilderStore.getState().etching;
     const mask =
       spacerPositions.length > 0 && runeName.length > 1
         ? spacerBitmask(runeName, spacerPositions)
         : 0;
     if (
-      runeName === etching.runeName &&
-      symbol === etching.symbol &&
-      divisibility === etching.divisibility &&
-      mask === etching.spacers
+      runeName === current.runeName &&
+      symbol === current.symbol &&
+      divisibility === current.divisibility &&
+      mask === current.spacers
     ) return;
     updateEtching({ runeName, spacers: mask, symbol, divisibility });
-  }, [runeName, symbol, divisibility, spacerPositions, phase, etching]);
+  }, [runeName, symbol, divisibility, spacerPositions, phase, updateEtching]);
 
   function handleNameChange(raw: string) {
     const upper = raw.toUpperCase().replace(/[^A-Z]/g, '');

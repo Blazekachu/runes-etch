@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { connectWallet, disconnectWallet, type WalletProvider } from '@/lib/wallet/xverse';
 import { useBuilderStore } from '@/store/builderStore';
 import { setMempoolNetwork, getCurrentBlockHeight } from '@/lib/api/mempool';
@@ -14,6 +14,15 @@ export default function WalletHeader() {
   const phase = useBuilderStore((s) => s.phase);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Re-arm module-level mempool + ordinals network state whenever a connected
+  // wallet appears — covers persist-rehydration where handleConnect doesn't run.
+  // Idempotent: safe to re-run on the same address (fresh connect already did it).
+  useEffect(() => {
+    if (!wallet.connected || !wallet.taprootAddress) return;
+    setMempoolNetwork(wallet.taprootAddress).catch(() => {});
+    setOrdinalsTestnet(wallet.taprootAddress);
+  }, [wallet.connected, wallet.taprootAddress]);
 
   async function handleConnect(provider: WalletProvider = 'sats-connect') {
     setLoading(true);

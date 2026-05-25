@@ -109,9 +109,12 @@ export default function SupplyMintSection() {
   useEffect(() => { setOffsetEnd(etching.terms?.offsetEnd?.toString() ?? ''); }, [etching.terms?.offsetEnd]);
 
   // Sync TO store only when actively editing — never during a locked/resumed bundle phase.
-  // Equality guard prevents sync-from-store → sync-back feedback loops.
+  // Why: keeping `etching` out of deps prevents sync-back from re-firing every time
+  // ANY section writes etching (which creates a new etching ref). We read the current
+  // etching via getState() for the equality check so writes still skip when matched.
   useEffect(() => {
     if (phase !== 'building') return;
+    const current = useBuilderStore.getState().etching;
     const hStart = parseOptionalInt(heightStart);
     const hEnd = parseOptionalInt(heightEnd);
     const oStart = parseOptionalInt(offsetStart);
@@ -121,21 +124,21 @@ export default function SupplyMintSection() {
       : null;
     const termsMatch =
       nextTerms === null
-        ? etching.terms === null
-        : etching.terms !== null &&
-          etching.terms.amount === nextTerms.amount &&
-          etching.terms.cap === nextTerms.cap &&
-          etching.terms.heightStart === nextTerms.heightStart &&
-          etching.terms.heightEnd === nextTerms.heightEnd &&
-          etching.terms.offsetStart === nextTerms.offsetStart &&
-          etching.terms.offsetEnd === nextTerms.offsetEnd;
+        ? current.terms === null
+        : current.terms !== null &&
+          current.terms.amount === nextTerms.amount &&
+          current.terms.cap === nextTerms.cap &&
+          current.terms.heightStart === nextTerms.heightStart &&
+          current.terms.heightEnd === nextTerms.heightEnd &&
+          current.terms.offsetStart === nextTerms.offsetStart &&
+          current.terms.offsetEnd === nextTerms.offsetEnd;
     if (
-      premineVal === etching.premine &&
-      turbo === etching.turbo &&
+      premineVal === current.premine &&
+      turbo === current.turbo &&
       termsMatch
     ) return;
     updateEtching({ premine: premineVal, turbo, terms: nextTerms });
-  }, [premine, turbo, openMint, mintAmount, cap, heightStart, heightEnd, offsetStart, offsetEnd, phase, etching]);
+  }, [premine, turbo, openMint, mintAmount, cap, heightStart, heightEnd, offsetStart, offsetEnd, phase, premineVal, mintAmountVal, capVal, updateEtching]);
 
   // Compute badge
   let badge: string;

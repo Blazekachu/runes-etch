@@ -2,8 +2,8 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
-import { fetchUtxos } from '@/lib/api/mempool';
-import { labelUtxos, fetchUtxoSatInfo, isOrdinalsTestnet, type UtxoLabel } from '@/lib/api/ordinals';
+import { fetchUtxos, setMempoolNetwork } from '@/lib/api/mempool';
+import { labelUtxos, fetchUtxoSatInfo, isOrdinalsTestnet, setOrdinalsTestnet, type UtxoLabel } from '@/lib/api/ordinals';
 import type { LabeledUtxo, SatRarity } from '@/types';
 import SectionWrapper from './SectionWrapper';
 
@@ -129,6 +129,10 @@ export default function UtxoSection() {
     setError(null);
     autoSelectedRef.current = false;
     try {
+      // Ensure module-level mempool/ordinals network state matches the address.
+      // Critical when wallet was rehydrated from persist (handleConnect never ran).
+      await setMempoolNetwork(wallet.taprootAddress);
+      setOrdinalsTestnet(wallet.taprootAddress);
       const [taprootRaw, paymentRaw] = await Promise.all([
         fetchUtxos(wallet.taprootAddress),
         wallet.paymentAddress && wallet.paymentAddress !== wallet.taprootAddress

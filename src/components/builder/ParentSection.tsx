@@ -33,8 +33,11 @@ export default function ParentSection() {
 
   // --- Parent verify ---
   // Accepts an explicit ID so bundle-resume can call it without going through input state first.
+  // Defensive: only treat explicitId as the source when it's actually a string — onClick passes
+  // a MouseEvent, and bad persisted state could put a non-string here.
   async function handleParentVerify(explicitId?: string) {
-    const id = (explicitId ?? parentId).trim();
+    const source = typeof explicitId === 'string' ? explicitId : parentId;
+    const id = source.trim();
     if (!INSCRIPTION_ID_REGEX.test(id)) {
       setVerifyState('error');
       setVerifyError('Invalid inscription ID format.');
@@ -123,7 +126,7 @@ export default function ParentSection() {
             className="flex-1 rounded-lg border border-gray-700 bg-gray-900 px-4 py-2.5 font-mono text-xs text-white placeholder-gray-600 focus:border-orange-500 focus:outline-none"
           />
           <button
-            onClick={handleParentVerify}
+            onClick={() => handleParentVerify()}
             disabled={!parentId.trim() || verifyState === 'loading'}
             className="rounded-lg border border-orange-500 px-4 py-2.5 text-sm font-semibold text-orange-500 hover:bg-orange-500 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
           >
