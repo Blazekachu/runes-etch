@@ -40,6 +40,7 @@ export default function WaitingPhase() {
   const setVanityProgress = useBuilderStore((s) => s.setVanityProgress);
   const setVanityLocktime = useBuilderStore((s) => s.setVanityLocktime);
   const selectedFeeRate = useBuilderStore((s) => s.selectedFeeRate);
+  const selectedRevealFeeRate = useBuilderStore((s) => s.selectedRevealFeeRate);
   const setSelectedFeeRate = useBuilderStore((s) => s.setSelectedFeeRate);
   const feeRatesFromStore = useBuilderStore((s) => s.feeRates);
   const setFeeRatesStore = useBuilderStore((s) => s.setFeeRates);
@@ -117,6 +118,10 @@ export default function WaitingPhase() {
 
   const buildTxTemplate = useCallback((): { template: Uint8Array | null; error?: string } => {
     if (!commitState || !wallet.publicKey) return { template: null, error: 'Wallet not connected.' };
+    // Bundle-resume race: phase flips to 'waiting' before etching is fully populated, or
+    // a previous reset left runeName empty. Bail out gracefully — runeNameToU128 throws
+    // on '' and would crash the page during template build.
+    if (!etching.runeName) return { template: null, error: 'Rune name not yet loaded.' };
 
     // Use cached tapscript data — same source the reveal phase will use
     const tsHex = cachedTapscriptHex;
@@ -284,12 +289,20 @@ export default function WaitingPhase() {
     grindStartedRef.current = false;
   }
 
+  // Upper bound for reveal fee rate: whatever was pre-funded into commit.vout[0]
+  // (selectedRevealFeeRate from bundle/store). Null means unknown/legacy → no cap from
+  // this side; insufficient-funds will surface at build time if user picks too high.
+  const revealMaxRate = selectedRevealFeeRate ?? 2000;
+  const clampReveal = (v: number): number => Math.max(1, Math.min(v, revealMaxRate));
+
   function handleFeeMode(mode: typeof feeMode) {
     setFeeMode(mode);
     if (!feeRatesFromStore) return;
-    if (mode === 'economy') setSelectedFeeRate(feeRatesFromStore.economyFee);
-    else if (mode === 'normal') setSelectedFeeRate(feeRatesFromStore.halfHourFee);
-    else if (mode === 'fast') setSelectedFeeRate(feeRatesFromStore.fastestFee);
+    let raw = 0;
+    if (mode === 'economy') raw = feeRatesFromStore.economyFee;
+    else if (mode === 'normal') raw = feeRatesFromStore.halfHourFee;
+    else if (mode === 'fast') raw = feeRatesFromStore.fastestFee;
+    if (raw > 0) setSelectedFeeRate(clampReveal(raw));
     resetVanityForNewFee();
   }
 
@@ -298,7 +311,7 @@ export default function WaitingPhase() {
     setFeeMode('custom');
     const v = parseInt(val, 10);
     if (!isNaN(v) && v >= 1) {
-      setSelectedFeeRate(Math.min(v, 2000));
+      setSelectedFeeRate(clampReveal(v));
       resetVanityForNewFee();
     }
   }
@@ -347,6 +360,7 @@ export default function WaitingPhase() {
         parentInscriptionId: parentInscription?.inscriptionId ?? null,
         etching,
         taprootAddress: wallet.taprootAddress,
+        revealFeeRateBudget: selectedRevealFeeRate ?? undefined,
       });
       downloadBundle(bundle);
       setBundleDownloaded(true);
@@ -450,7 +464,7 @@ export default function WaitingPhase() {
               <p className="text-sm font-medium text-gray-300">Vanity TXID <span className="text-gray-500 font-normal">(optional)</span></p>
               <p className="text-xs text-gray-500 mt-1">Hex only (0-9, a-f). Max 6 total. Grinding starts automatically.</p>
             </div>
-            {hasVanity && !vanityProgress.found && (
+            {hasVanity && (
               <button
                 onClick={() => setVanitySkipped(true)}
                 className="text-xs text-gray-500 hover:text-gray-300 transition-colors shrink-0"
@@ -460,8 +474,10 @@ export default function WaitingPhase() {
             )}
           </div>
 
-          {!vanityProgress.found && (
-            <div className="flex gap-4">
+          {/* Inputs always visible — at typical CPU speeds short prefixes are found in
+              milliseconds, so hiding inputs on "found" prevents the user from finishing
+              their pattern. Editing either input resets the grind state. */}
+          <div className="flex gap-4">
               <div className="flex flex-col gap-1 flex-1">
                 <label className="text-xs text-gray-500 uppercase tracking-wider">Prefix</label>
                 <input
@@ -499,7 +515,6 @@ export default function WaitingPhase() {
                 />
               </div>
             </div>
-          )}
 
           {/* Grinding progress — shows inline when vanity is set */}
           {hasVanity && vanityProgress.found && (
@@ -553,6 +568,12 @@ export default function WaitingPhase() {
             {loadingFees ? 'Loading...' : 'Refresh'}
           </button>
         </div>
+        {selectedRevealFeeRate && (
+          <p className="text-xs text-gray-500">
+            Budget pre-funded at commit time: <span className="text-orange-400 font-mono">≤{selectedRevealFeeRate} sat/vB</span>.
+            Pick less and the difference returns to your segwit as change.
+          </p>
+        )}
         <div className="flex gap-2">
           {(['economy', 'normal', 'fast'] as const).map((mode) => (
             <button

@@ -13,13 +13,15 @@ interface ExportParams {
   etching: RuneEtching;
   /** Address used to detect network (mainnet bc1p/testnet tb1p/signet) */
   taprootAddress?: string;
+  /** Max reveal fee rate (sat/vB) the commit was funded for. Optional. */
+  revealFeeRateBudget?: number;
 }
 
 export function createCommitBundle(params: ExportParams): CommitBundle {
   const {
     commitState, runeName, tapscript, controlBlock,
     internalPubkey, inscriptionFile, delegateInscriptionId, parentInscriptionId, etching,
-    taprootAddress,
+    taprootAddress, revealFeeRateBudget,
   } = params;
 
   const network = detectNetwork(taprootAddress);
@@ -62,6 +64,7 @@ export function createCommitBundle(params: ExportParams): CommitBundle {
         : null,
       turbo: etching.turbo,
     },
+    ...(revealFeeRateBudget !== undefined ? { revealFeeRateBudget } : {}),
   };
 }
 

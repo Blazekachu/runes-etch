@@ -171,16 +171,35 @@ interface BuilderStore {
   // Fees
   feeRates: FeeRates | null;
   setFeeRates: (rates: FeeRates) => void;
+  /** Commit fee rate (sat/vB). The user's selected rate for the commit TX. Also used as fallback for selectedRevealFeeRate. */
   selectedFeeRate: number;
   setSelectedFeeRate: (rate: number) => void;
+  /**
+   * Reveal fee rate budget (sat/vB). The MAX rate the reveal can pay — controls how
+   * many sats the commit pre-allocates to commit.vout[0]. At reveal sign time the user
+   * can pick any rate from 1 up to this value; difference returns to payment as change.
+   * Falls back to selectedFeeRate when null (back-compat with old bundles).
+   */
+  selectedRevealFeeRate: number | null;
+  setSelectedRevealFeeRate: (rate: number | null) => void;
 
-  // Vanity
+  // Vanity — these existing fields apply to the REVEAL TX in commit-reveal mode,
+  // and to the single TX in quick mode. Renaming would be more invasive; the new
+  // commit-vanity fields below are explicitly named for clarity.
   vanityConfig: VanityConfig;
   setVanityConfig: (config: VanityConfig) => void;
   vanityProgress: VanityProgress;
   setVanityProgress: (progress: VanityProgress) => void;
   vanityLocktime: number | null;
   setVanityLocktime: (v: number | null) => void;
+  /** Commit-TXID vanity config — applies only in commit-reveal mode. Grinds before signing the commit. */
+  commitVanityConfig: VanityConfig;
+  setCommitVanityConfig: (config: VanityConfig) => void;
+  commitVanityProgress: VanityProgress;
+  setCommitVanityProgress: (progress: VanityProgress) => void;
+  /** Found nLockTime for the commit. Set when grinder succeeds; consumed by BuildButton at sign time. */
+  commitVanityLocktime: number | null;
+  setCommitVanityLocktime: (v: number | null) => void;
 
   // Commit TX state
   commitState: CommitTxState | null;
@@ -396,6 +415,8 @@ export const useBuilderStore = create<BuilderStore>()(
       setFeeRates: (rates) => set({ feeRates: rates }),
       selectedFeeRate: 10,
       setSelectedFeeRate: (rate) => set({ selectedFeeRate: rate }),
+      selectedRevealFeeRate: null,
+      setSelectedRevealFeeRate: (rate) => set({ selectedRevealFeeRate: rate }),
 
       vanityConfig: { prefix: '', suffix: '' },
       setVanityConfig: (config) => set({ vanityConfig: config }),
@@ -403,6 +424,12 @@ export const useBuilderStore = create<BuilderStore>()(
       setVanityProgress: (progress) => set({ vanityProgress: progress }),
       vanityLocktime: null,
       setVanityLocktime: (v) => set({ vanityLocktime: v }),
+      commitVanityConfig: { prefix: '', suffix: '' },
+      setCommitVanityConfig: (config) => set({ commitVanityConfig: config }),
+      commitVanityProgress: { ...defaultVanityProgress },
+      setCommitVanityProgress: (progress) => set({ commitVanityProgress: progress }),
+      commitVanityLocktime: null,
+      setCommitVanityLocktime: (v) => set({ commitVanityLocktime: v }),
 
       commitState: null,
       setCommitState: (state) => set({ commitState: state }),
@@ -482,6 +509,10 @@ export const useBuilderStore = create<BuilderStore>()(
           vanityConfig: { prefix: '', suffix: '' },
           vanityProgress: { ...defaultVanityProgress },
           vanityLocktime: null,
+          // Carry the reveal-fee budget from the bundle so WaitingPhase can cap the
+          // reveal fee selector at what the commit actually pre-funded. Null = unknown
+          // (pre-feature bundles); reveal can pay up to whatever commit.vout[0] allows.
+          selectedRevealFeeRate: bundle.revealFeeRateBudget ?? null,
         });
       },
 
@@ -503,9 +534,13 @@ export const useBuilderStore = create<BuilderStore>()(
         reinscribeMode: false,
         feeRates: null,
         selectedFeeRate: 10,
+        selectedRevealFeeRate: null,
         vanityConfig: { prefix: '', suffix: '' },
         vanityProgress: { ...defaultVanityProgress },
         vanityLocktime: null,
+        commitVanityConfig: { prefix: '', suffix: '' },
+        commitVanityProgress: { ...defaultVanityProgress },
+        commitVanityLocktime: null,
         commitState: null,
         bundleDownloaded: false,
         revealTxid: null,
@@ -550,7 +585,10 @@ export const useBuilderStore = create<BuilderStore>()(
         commitState: state.commitState ? { txid: state.commitState.txid, rawHex: '', confirmations: state.commitState.confirmations, commitOutputIndex: state.commitState.commitOutputIndex, commitOutputValue: state.commitState.commitOutputValue, changeAddress: state.commitState.changeAddress } : null,
         vanityConfig: state.vanityConfig,
         vanityLocktime: state.vanityLocktime,
+        commitVanityConfig: state.commitVanityConfig,
+        commitVanityLocktime: state.commitVanityLocktime,
         selectedFeeRate: state.selectedFeeRate,
+        selectedRevealFeeRate: state.selectedRevealFeeRate,
         cachedTapscriptHex: state.cachedTapscriptHex,
         cachedControlBlockHex: state.cachedControlBlockHex,
         cachedInternalPubkeyHex: state.cachedInternalPubkeyHex,

@@ -24,9 +24,23 @@ export interface CommitTxParams {
   parentInscription: ParentInscription | null;
   fundingUtxos: FundingUtxo[];
   feeRate: number;
+  /**
+   * Reveal fee rate budget (sat/vB). Optional — defaults to feeRate when unset.
+   * Sets the upper bound on what the reveal can pay. The commit allocates
+   * `revealFeeRate × estimated_reveal_vbytes` worth of sats to commit.vout[0],
+   * so the reveal can pay anywhere from 1 sat/vB up to revealFeeRate at sign time.
+   * Excess (when reveal picks a lower rate) returns to the payment address as change.
+   */
+  revealFeeRate?: number;
   changeAddress: string;
   internalPubkey: Buffer;
   network?: bitcoin.Network;
+  /**
+   * nLockTime value for vanity commit-TXID grinding. Ignored by consensus when all
+   * input sequences are 0xffffffff (PSBT default), so it's safe to vary purely for
+   * TXID grinding. Mirror of the reveal-side locktime field.
+   */
+  locktime?: number;
 }
 
 export interface CommitTxResult {
@@ -47,6 +61,7 @@ export function buildCommitTx(params: CommitTxParams): CommitTxResult {
     feeRate, changeAddress, internalPubkey,
     network = bitcoin.networks.bitcoin,
   } = params;
+  const revealFeeRate = params.revealFeeRate ?? feeRate;
 
   const runeCommitment = runeNameToCommitmentBytes(runeName);
 
@@ -81,13 +96,24 @@ export function buildCommitTx(params: CommitTxParams): CommitTxResult {
   const contentSize = inscriptionFile?.body.length ?? 0;
   // Always include a rune receiver output — runes need a non-OP_RETURN destination.
   // In inscription mode: this is the inscription output. In no-inscription: dedicated dust output.
+  // Reveal budget uses the (possibly higher) revealFeeRate — that's what gets
+  // baked into commit.vout[0]. Reveal can pay 1..revealFeeRate at sign time;
+  // any unspent budget returns to payment as change.
   const revealVBytes = estimateRevealVBytes(contentSize, true, !!parentInscription);
-  const revealFee = BigInt(Math.ceil(revealVBytes * feeRate));
+  const revealFee = BigInt(Math.ceil(revealVBytes * revealFeeRate));
   const runeOutputValue = DUST_LIMIT; // rune receiver always present
   const parentReturnValue = parentInscription ? DUST_LIMIT : 0n;
   const commitOutputValue = revealFee + runeOutputValue + parentReturnValue + DUST_LIMIT;
 
   const psbt = new bitcoin.Psbt({ network });
+
+  // Set nLockTime for vanity grinding (safe: all input sequences stay 0xffffffff
+  // by default, which disables locktime enforcement at consensus level).
+  const locktime = params.locktime ?? 0;
+  if (locktime > 0) {
+    const txObj = (psbt as unknown as { __CACHE: { __TX: bitcoin.Transaction } }).__CACHE.__TX;
+    txObj.locktime = locktime;
+  }
 
   let totalInput = 0n;
   for (const utxo of fundingUtxos) {

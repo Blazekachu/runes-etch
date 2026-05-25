@@ -225,6 +225,13 @@ export interface CommitBundle {
     } | null;
     turbo: boolean;
   };
+
+  /**
+   * Max reveal fee rate the commit was funded for (sat/vB). Optional for back-compat —
+   * older bundles without this field default reveal fee rate to whatever the user picks,
+   * bounded by commit.vout[0]'s available funds.
+   */
+  revealFeeRateBudget?: number;
 }
 
 export interface BundleValidation {

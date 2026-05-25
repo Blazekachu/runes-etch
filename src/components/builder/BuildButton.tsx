@@ -18,9 +18,15 @@ export default function BuildButton() {
   const delegateInscriptionId = useBuilderStore((s) => s.delegateInscriptionId);
   const parentInscription = useBuilderStore((s) => s.parentInscription);
   const selectedFeeRate = useBuilderStore((s) => s.selectedFeeRate);
+  const selectedRevealFeeRate = useBuilderStore((s) => s.selectedRevealFeeRate);
   const vanityConfig = useBuilderStore((s) => s.vanityConfig);
   const vanityProgress = useBuilderStore((s) => s.vanityProgress);
   const setVanityProgress = useBuilderStore((s) => s.setVanityProgress);
+  const commitVanityConfig = useBuilderStore((s) => s.commitVanityConfig);
+  const commitVanityProgress = useBuilderStore((s) => s.commitVanityProgress);
+  const setCommitVanityProgress = useBuilderStore((s) => s.setCommitVanityProgress);
+  const commitVanityLocktime = useBuilderStore((s) => s.commitVanityLocktime);
+  const setCommitVanityLocktime = useBuilderStore((s) => s.setCommitVanityLocktime);
   const detectedMode = useBuilderStore((s) => s.detectedMode);
   const phase = useBuilderStore((s) => s.phase);
   const setPhase = useBuilderStore((s) => s.setPhase);
@@ -193,27 +199,13 @@ export default function BuildButton() {
     setPhase('complete');
   }
 
-  // --- Commit-Reveal Flow ---
-  async function handleCommitReveal() {
-    const internalPubkey = deriveInternalPubkey();
-    const fundingUtxos = buildFundingUtxos();
-    const btcNetwork = bitcoinNetworkForAddress(wallet.taprootAddress);
-
-    const hasInscription = !!(inscriptionFile || delegateInscriptionId);
-
-    const result = buildCommitTx({
-      runeName: etching.runeName,
-      inscriptionFile: hasInscription ? inscriptionFile : null,
-      delegateId: hasInscription ? delegateInscriptionId : null,
-      parentInscription: hasInscription ? parentInscription : null,
-      fundingUtxos,
-      feeRate: selectedFeeRate,
-      changeAddress: getChangeAddress(),
-      internalPubkey,
-      network: btcNetwork,
-    });
-
-    // Dust change warning
+  // Shared finalize path: takes a built CommitTxResult + locktime context, signs,
+  // broadcasts, and transitions to waiting. Factored out so the vanity-grind and
+  // no-vanity paths can both reuse it.
+  async function signAndBroadcastCommit(
+    result: ReturnType<typeof buildCommitTx>,
+    internalPubkey: Buffer,
+  ): Promise<void> {
     if (result.dustChange > 0 && dustConfirm !== result.dustChange) {
       setDustConfirm(result.dustChange);
       setLoading(false);
@@ -244,13 +236,84 @@ export default function BuildButton() {
       changeAddress: getChangeAddress(),
     });
 
-    // Cache tapscript data so reveal step works after page refresh
     const tapHex = Buffer.from(result.tapscript).toString('hex');
     const cbHex = Buffer.from(result.controlBlock).toString('hex');
     const pkHex = internalPubkey.toString('hex');
     setCachedTapscript(tapHex, cbHex, pkHex);
 
     setPhase('waiting');
+  }
+
+  // --- Commit-Reveal Flow ---
+  async function handleCommitReveal() {
+    const internalPubkey = deriveInternalPubkey();
+    const fundingUtxos = buildFundingUtxos();
+    const btcNetwork = bitcoinNetworkForAddress(wallet.taprootAddress);
+
+    const hasInscription = !!(inscriptionFile || delegateInscriptionId);
+    const hasCommitVanity = commitVanityConfig.prefix.length > 0 || commitVanityConfig.suffix.length > 0;
+
+    const commitParamsBase = {
+      runeName: etching.runeName,
+      inscriptionFile: hasInscription ? inscriptionFile : null,
+      delegateId: hasInscription ? delegateInscriptionId : null,
+      parentInscription: hasInscription ? parentInscription : null,
+      fundingUtxos,
+      feeRate: selectedFeeRate,
+      // When user picked a separate reveal budget, fund commit.vout[0] for it.
+      // Falls back to selectedFeeRate inside commit.ts when undefined.
+      revealFeeRate: selectedRevealFeeRate ?? undefined,
+      changeAddress: getChangeAddress(),
+      internalPubkey,
+      network: btcNetwork,
+    };
+
+    // No commit vanity → build + sign directly.
+    if (!hasCommitVanity) {
+      const result = buildCommitTx(commitParamsBase);
+      await signAndBroadcastCommit(result, internalPubkey);
+      return;
+    }
+
+    // Commit vanity → grind nLockTime first, then rebuild with the winning value
+    // and sign. Same pattern as quick-mode vanity (handleQuickEtch).
+    setGrinding(true);
+    broadcastingRef.current = false;
+    setLoading(false);
+
+    const template = serializeForTxid(buildCommitTx({ ...commitParamsBase, locktime: 0 }).psbt);
+
+    const grinder = new VanityGrinder();
+    grinderRef.current = grinder;
+
+    await new Promise<void>((resolve, reject) => {
+      grinder.start({
+        txTemplate: template,
+        nonceOffset: template.length - 4, // nLockTime = last 4 bytes
+        nonceLength: 4,
+        config: commitVanityConfig,
+        onProgress: (progress) => setCommitVanityProgress(progress),
+        onFound: async (nonce) => {
+          grinderRef.current = null;
+          setGrinding(false);
+          setLoading(true);
+          broadcastingRef.current = true;
+
+          try {
+            const dv = new DataView(nonce.buffer, nonce.byteOffset, nonce.byteLength);
+            const foundLocktime = dv.getUint32(0, true);
+            setCommitVanityLocktime(foundLocktime);
+
+            const finalResult = buildCommitTx({ ...commitParamsBase, locktime: foundLocktime });
+            await signAndBroadcastCommit(finalResult, internalPubkey);
+            resolve();
+          } catch (err) {
+            if (err instanceof DustConfirmNeeded) { resolve(); return; }
+            reject(err);
+          }
+        },
+      });
+    });
   }
 
   // --- Main handler ---
@@ -298,7 +361,12 @@ export default function BuildButton() {
     grinderRef.current?.stop();
     grinderRef.current = null;
     setGrinding(false);
-    setVanityProgress({ attempts: 0, speed: 0, bestMatch: '', found: false, nonce: null });
+    // Reset whichever progress source was driving this grind.
+    if (isQuick) {
+      setVanityProgress({ attempts: 0, speed: 0, bestMatch: '', found: false, nonce: null });
+    } else {
+      setCommitVanityProgress({ attempts: 0, speed: 0, bestMatch: '', found: false, nonce: null });
+    }
   }
 
   const buttonLabel = grinding
@@ -334,13 +402,18 @@ export default function BuildButton() {
         </div>
       )}
 
-      {/* Vanity grinding status */}
-      {grinding && (
+      {/* Vanity grinding status — sourced from quick-vanity (isQuick mode) or
+          commit-vanity (commit-reveal mode), whichever is active. */}
+      {grinding && (() => {
+        const activeConfig = isQuick ? vanityConfig : commitVanityConfig;
+        const activeProgress = isQuick ? vanityProgress : commitVanityProgress;
+        const label = isQuick ? 'Grinding vanity TXID...' : 'Grinding commit TXID...';
+        return (
         <div className="flex flex-col gap-3 rounded-lg border border-gray-800 bg-gray-900 p-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="inline-block w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
-              <p className="text-sm font-medium text-gray-300">Grinding vanity TXID...</p>
+              <p className="text-sm font-medium text-gray-300">{label}</p>
             </div>
             <button
               onClick={handleCancelGrind}
@@ -353,24 +426,25 @@ export default function BuildButton() {
             <div className="flex justify-between">
               <span className="text-gray-500">Target</span>
               <span className="text-orange-400">
-                {vanityConfig.prefix && `prefix: ${vanityConfig.prefix}`}
-                {vanityConfig.prefix && vanityConfig.suffix && ' | '}
-                {vanityConfig.suffix && `suffix: ${vanityConfig.suffix}`}
+                {activeConfig.prefix && `prefix: ${activeConfig.prefix}`}
+                {activeConfig.prefix && activeConfig.suffix && ' | '}
+                {activeConfig.suffix && `suffix: ${activeConfig.suffix}`}
               </span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-500">Attempts</span>
-              <span className="text-gray-300">{vanityProgress.attempts.toLocaleString()}</span>
+              <span className="text-gray-300">{activeProgress.attempts.toLocaleString()}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-500">Speed</span>
               <span className="text-gray-300">
-                {vanityProgress.speed > 0 ? `${vanityProgress.speed.toLocaleString()} h/s` : '--'}
+                {activeProgress.speed > 0 ? `${activeProgress.speed.toLocaleString()} h/s` : '--'}
               </span>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Error display */}
       {error && (
