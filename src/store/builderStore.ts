@@ -7,6 +7,10 @@ import type {
 } from '@/types';
 import { minimumAtHeight, runeNameToU128 } from '@/lib/runes/names';
 
+/** Max age of a persisted wallet connection before it's discarded on page load. */
+const WALLET_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const DISCONNECTED_WALLET: WalletState = { connected: false, taprootAddress: '', paymentAddress: '', publicKey: '' };
+
 // --- JSON serialization for BigInt and Uint8Array ---
 
 function replacer(_key: string, value: unknown): unknown {
@@ -102,6 +106,12 @@ interface BuilderStore {
   // Wallet
   wallet: WalletState;
   setWallet: (wallet: WalletState) => void;
+  /** Unix ms when wallet was last connected. Used to expire auto-reconnect after WALLET_SESSION_TTL_MS. */
+  connectedAt: number | null;
+
+  /** Parent inscription ID carried in from a bundle resume; ParentSection re-resolves it to a live UTXO. */
+  pendingParentId: string | null;
+  setPendingParentId: (id: string | null) => void;
 
   // Rune details
   etching: RuneEtching;
@@ -231,7 +241,11 @@ export const useBuilderStore = create<BuilderStore>()(
       setCurrentBlockHeight: (h) => set({ currentBlockHeight: h }),
 
       wallet: { connected: false, taprootAddress: '', paymentAddress: '', publicKey: '' },
-      setWallet: (wallet) => set({ wallet }),
+      connectedAt: null,
+      setWallet: (wallet) => set({ wallet, connectedAt: wallet.connected ? Date.now() : null }),
+
+      pendingParentId: null,
+      setPendingParentId: (id) => set({ pendingParentId: id }),
 
       etching: { ...defaultEtching },
       updateEtching: (partial) => set((state) => ({ etching: { ...state.etching, ...partial } })),
@@ -308,6 +322,17 @@ export const useBuilderStore = create<BuilderStore>()(
       setQuickTxid: (txid) => set({ quickTxid: txid }),
 
       loadFromBundle: (bundle) => {
+        // Decode the inscription body so UI sections (InscriptionSection) can display it.
+        // The reveal itself uses cachedTapscriptHex, which already has the body baked in —
+        // this is purely for display fidelity on resume.
+        let inscriptionFile: InscriptionFile | null = null;
+        if (bundle.inscriptionFile) {
+          const binary = atob(bundle.inscriptionFile.bodyBase64);
+          const body = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) body[i] = binary.charCodeAt(i);
+          inscriptionFile = { contentType: bundle.inscriptionFile.contentType, body };
+        }
+
         set({
           phase: 'waiting',
           detectedMode: 'commit-reveal',
@@ -338,8 +363,12 @@ export const useBuilderStore = create<BuilderStore>()(
             commitOutputValue: bundle.commitOutputValue,
             changeAddress: '',
           },
+          inscriptionFile,
           delegateInscriptionId: bundle.delegateInscriptionId ?? null,
+          // Parent UTXO data is intentionally not in the bundle (volatile). Carry the ID forward;
+          // ParentSection re-resolves it to a live UTXO via ordinals.com / mempool on mount.
           parentInscription: null,
+          pendingParentId: bundle.parentInscriptionId ?? null,
           bundleDownloaded: true,
           cachedTapscriptHex: bundle.tapscriptHex,
           cachedControlBlockHex: bundle.controlBlockHex,
@@ -361,6 +390,7 @@ export const useBuilderStore = create<BuilderStore>()(
         inscriptionFile: null,
         delegateInscriptionId: null,
         parentInscription: null,
+        pendingParentId: null,
         utxos: [],
         feeRates: null,
         selectedFeeRate: 10,
@@ -378,17 +408,34 @@ export const useBuilderStore = create<BuilderStore>()(
     }),
     {
       name: 'runes-etch-v2-store',
+      version: 2,
+      // No-op migrate: returning the persisted state as-is lets Zustand merge unknown fields
+      // (older snapshots without pendingParentId, etc.) with the current initial state defaults
+      // instead of logging a "couldn't be migrated" warning and discarding everything.
+      migrate: (persisted) => persisted as BuilderStore,
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        const fresh = state.connectedAt && Date.now() - state.connectedAt < WALLET_SESSION_TTL_MS;
+        if (!fresh) {
+          state.wallet = DISCONNECTED_WALLET;
+          state.connectedAt = null;
+        }
+      },
       partialize: (state) => ({
         phase: state.phase,
         openSections: state.openSections,
         detectedMode: state.detectedMode,
         detectedReason: state.detectedReason,
         currentBlockHeight: state.currentBlockHeight,
-        wallet: { connected: state.wallet.connected, taprootAddress: state.wallet.taprootAddress, paymentAddress: state.wallet.paymentAddress, publicKey: '' },
+        // Wallet auto-reconnect: persist full wallet (publicKey included — it's public).
+        // Expiry is enforced in onRehydrateStorage via WALLET_SESSION_TTL_MS.
+        wallet: state.wallet,
+        connectedAt: state.connectedAt,
         etching: state.etching,
         inscriptionFile: state.inscriptionFile,
         delegateInscriptionId: state.delegateInscriptionId,
         parentInscription: state.parentInscription,
+        pendingParentId: state.pendingParentId,
         commitState: state.commitState ? { txid: state.commitState.txid, rawHex: '', confirmations: state.commitState.confirmations, commitOutputIndex: state.commitState.commitOutputIndex, commitOutputValue: state.commitState.commitOutputValue, changeAddress: state.commitState.changeAddress } : null,
         vanityConfig: state.vanityConfig,
         vanityLocktime: state.vanityLocktime,

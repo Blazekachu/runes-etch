@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { getInscription, getOutput } from '@/lib/api/ordinals';
 import SectionWrapper from './SectionWrapper';
@@ -8,12 +8,19 @@ import SectionWrapper from './SectionWrapper';
 export default function ParentSection() {
   const parentInscription = useBuilderStore((s) => s.parentInscription);
   const setParentInscription = useBuilderStore((s) => s.setParentInscription);
+  const pendingParentId = useBuilderStore((s) => s.pendingParentId);
+  const setPendingParentId = useBuilderStore((s) => s.setPendingParentId);
   const wallet = useBuilderStore((s) => s.wallet);
   const isTestnet = wallet.taprootAddress.startsWith('tb1');
 
-  const [parentId, setParentId] = useState(parentInscription?.inscriptionId ?? '');
+  const [parentId, setParentId] = useState(parentInscription?.inscriptionId ?? pendingParentId ?? '');
   const [verifyState, setVerifyState] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle');
   const [verifyError, setVerifyError] = useState('');
+
+  // Sync local input from store when parent changes externally (bundle resume after re-resolve).
+  useEffect(() => {
+    if (parentInscription?.inscriptionId) setParentId(parentInscription.inscriptionId);
+  }, [parentInscription?.inscriptionId]);
 
   const INSCRIPTION_ID_REGEX = /^[0-9a-fA-F]{64}i\d+$/;
 
@@ -25,13 +32,15 @@ export default function ParentSection() {
   }
 
   // --- Parent verify ---
-  async function handleParentVerify() {
-    const id = parentId.trim();
+  // Accepts an explicit ID so bundle-resume can call it without going through input state first.
+  async function handleParentVerify(explicitId?: string) {
+    const id = (explicitId ?? parentId).trim();
     if (!INSCRIPTION_ID_REGEX.test(id)) {
       setVerifyState('error');
       setVerifyError('Invalid inscription ID format.');
       return;
     }
+    setParentId(id);
     setVerifyState('loading');
     setVerifyError('');
 
@@ -86,6 +95,19 @@ export default function ParentSection() {
     setParentId(val); setVerifyState('idle'); setVerifyError('');
     if (!val.trim()) setParentInscription(null);
   }
+
+  // Bundle resume: when loadFromBundle sets pendingParentId but no live parentInscription,
+  // re-resolve the parent UTXO automatically. RevealPhase will also re-resolve at sign time
+  // (defense in depth) — this resolve is for accurate template fee + UI display.
+  // Requires a connected wallet (testnet check + ownership compare depend on wallet address).
+  useEffect(() => {
+    if (!pendingParentId || parentInscription) return;
+    if (!wallet.connected) return;
+    handleParentVerify(pendingParentId).finally(() => setPendingParentId(null));
+    // handleParentVerify is referentially unstable but its behavior only depends on wallet/store
+    // values captured at call time; safe to omit from deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingParentId, parentInscription, wallet.connected]);
 
   return (
     <SectionWrapper sectionKey="parent" title="Parent Inscription" badge={badge}>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { getInscription } from '@/lib/api/ordinals';
 import { MAX_INSCRIPTION_SIZE } from '@/types';
@@ -31,8 +31,26 @@ export default function InscriptionSection() {
   const [delegateVerify, setDelegateVerify] = useState<'idle' | 'loading' | 'ok' | 'error'>(
     delegateInscriptionId ? 'ok' : 'idle'
   );
-  const [delegateInfo, setDelegateInfo] = useState<{ contentType: string; id: string } | null>(null);
+  const [delegateInfo, setDelegateInfo] = useState<{ contentType: string; id: string } | null>(
+    delegateInscriptionId ? { contentType: 'restored from bundle', id: delegateInscriptionId } : null
+  );
   const [delegateError, setDelegateError] = useState('');
+
+  // Sync FROM store when bundle load changes delegate/file externally.
+  // (Restoring inscriptionFile is automatic — it's read from store directly above.)
+  useEffect(() => {
+    setDelegateId(delegateInscriptionId ?? '');
+    if (delegateInscriptionId) {
+      setDelegateVerify('ok');
+      setDelegateInfo((prev) => prev ?? { contentType: 'restored from bundle', id: delegateInscriptionId });
+    }
+  }, [delegateInscriptionId]);
+
+  // Re-infer mode whenever store contents change (bundle resume picks the right tab).
+  useEffect(() => {
+    if (delegateInscriptionId) setInscriptionMode('delegate');
+    else if (inscriptionFile) setInscriptionMode('file');
+  }, [delegateInscriptionId, inscriptionFile]);
 
   const INSCRIPTION_ID_REGEX = /^[0-9a-fA-F]{64}i\d+$/;
 

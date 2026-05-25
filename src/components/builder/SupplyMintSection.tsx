@@ -32,6 +32,7 @@ function formatBigInt(n: bigint): string {
 export default function SupplyMintSection() {
   const etching = useBuilderStore((s) => s.etching);
   const updateEtching = useBuilderStore((s) => s.updateEtching);
+  const phase = useBuilderStore((s) => s.phase);
 
   const [premine, setPremine] = useState(etching.premine.toString());
   const [openMint, setOpenMint] = useState(etching.terms !== null);
@@ -96,18 +97,45 @@ export default function SupplyMintSection() {
 
   const hasErrors = supplyOverflow || (openMint && mintAmountVal > MAX_U128) || (openMint && capVal > MAX_U128) || premineVal > MAX_U128;
 
-  // Sync to store on every change
+  // Sync FROM store on external changes (bundle load, reset). See RuneDetailsSection for rationale.
+  useEffect(() => { setPremine(etching.premine.toString()); }, [etching.premine]);
+  useEffect(() => { setTurbo(etching.turbo); }, [etching.turbo]);
+  useEffect(() => { setOpenMint(etching.terms !== null); }, [etching.terms]);
+  useEffect(() => { setMintAmount(etching.terms?.amount.toString() ?? '0'); }, [etching.terms?.amount]);
+  useEffect(() => { setCap(etching.terms?.cap.toString() ?? '0'); }, [etching.terms?.cap]);
+  useEffect(() => { setHeightStart(etching.terms?.heightStart?.toString() ?? ''); }, [etching.terms?.heightStart]);
+  useEffect(() => { setHeightEnd(etching.terms?.heightEnd?.toString() ?? ''); }, [etching.terms?.heightEnd]);
+  useEffect(() => { setOffsetStart(etching.terms?.offsetStart?.toString() ?? ''); }, [etching.terms?.offsetStart]);
+  useEffect(() => { setOffsetEnd(etching.terms?.offsetEnd?.toString() ?? ''); }, [etching.terms?.offsetEnd]);
+
+  // Sync TO store only when actively editing — never during a locked/resumed bundle phase.
+  // Equality guard prevents sync-from-store → sync-back feedback loops.
   useEffect(() => {
+    if (phase !== 'building') return;
     const hStart = parseOptionalInt(heightStart);
     const hEnd = parseOptionalInt(heightEnd);
     const oStart = parseOptionalInt(offsetStart);
     const oEnd = parseOptionalInt(offsetEnd);
-    updateEtching({
-      premine: premineVal,
-      turbo,
-      terms: openMint ? { amount: mintAmountVal, cap: capVal, heightStart: hStart, heightEnd: hEnd, offsetStart: oStart, offsetEnd: oEnd } : null,
-    });
-  }, [premine, turbo, openMint, mintAmount, cap, heightStart, heightEnd, offsetStart, offsetEnd]);
+    const nextTerms = openMint
+      ? { amount: mintAmountVal, cap: capVal, heightStart: hStart, heightEnd: hEnd, offsetStart: oStart, offsetEnd: oEnd }
+      : null;
+    const termsMatch =
+      nextTerms === null
+        ? etching.terms === null
+        : etching.terms !== null &&
+          etching.terms.amount === nextTerms.amount &&
+          etching.terms.cap === nextTerms.cap &&
+          etching.terms.heightStart === nextTerms.heightStart &&
+          etching.terms.heightEnd === nextTerms.heightEnd &&
+          etching.terms.offsetStart === nextTerms.offsetStart &&
+          etching.terms.offsetEnd === nextTerms.offsetEnd;
+    if (
+      premineVal === etching.premine &&
+      turbo === etching.turbo &&
+      termsMatch
+    ) return;
+    updateEtching({ premine: premineVal, turbo, terms: nextTerms });
+  }, [premine, turbo, openMint, mintAmount, cap, heightStart, heightEnd, offsetStart, offsetEnd, phase, etching]);
 
   // Compute badge
   let badge: string;

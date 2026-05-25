@@ -6,6 +6,10 @@ import type {
   VanityConfig, VanityProgress, CommitTxState, FeeRates, CommitBundle,
 } from '@/types';
 
+/** Max age of a persisted wallet connection before it's discarded on page load. */
+const WALLET_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const DISCONNECTED_WALLET: WalletState = { connected: false, taprootAddress: '', paymentAddress: '', publicKey: '' };
+
 // JSON serialization for BigInt and Uint8Array.
 // BigInt → {"__bigint__": "123"}, Uint8Array → {"__uint8array__": "base64..."}
 function replacer(_key: string, value: unknown): unknown {
@@ -55,6 +59,8 @@ interface EtchStore {
   // Wallet
   wallet: WalletState;
   setWallet: (wallet: WalletState) => void;
+  /** Unix ms when wallet was last connected. Drives the 7-day auto-reconnect TTL. */
+  connectedAt: number | null;
 
   // Rune details
   etching: RuneEtching;
@@ -149,7 +155,8 @@ export const useEtchStore = create<EtchStore>()(
       setStep: (step) => set({ step }),
 
       wallet: { connected: false, taprootAddress: '', paymentAddress: '', publicKey: '' },
-      setWallet: (wallet) => set({ wallet }),
+      connectedAt: null,
+      setWallet: (wallet) => set({ wallet, connectedAt: wallet.connected ? Date.now() : null }),
 
       etching: { ...defaultEtching },
       updateEtching: (partial) => set((state) => ({ etching: { ...state.etching, ...partial } })),
@@ -275,6 +282,7 @@ export const useEtchStore = create<EtchStore>()(
         etchMode: 'full',
         step: 'connect',
         wallet: { connected: false, taprootAddress: '', paymentAddress: '', publicKey: '' },
+        connectedAt: null,
         etching: { ...defaultEtching },
         inscriptionFile: null,
         delegateInscriptionId: null,
@@ -295,12 +303,28 @@ export const useEtchStore = create<EtchStore>()(
     }),
     {
       name: 'runes-etch-store',
+      version: 2,
+      migrate: (persisted) => persisted as EtchStore,
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        const fresh = state.connectedAt && Date.now() - state.connectedAt < WALLET_SESSION_TTL_MS;
+        if (!fresh) {
+          state.wallet = DISCONNECTED_WALLET;
+          state.connectedAt = null;
+          // Bounce back to the connect step — there's no point sitting on a later wizard step
+          // with no wallet and a stale form.
+          state.step = 'connect';
+        }
+      },
       // Only persist fields needed for session recovery.
       // etching contains BigInt (premine); handled via replacer/reviver below.
       partialize: (state) => ({
         step: state.step,
         etchMode: state.etchMode,
-        wallet: { connected: state.wallet.connected, taprootAddress: state.wallet.taprootAddress, paymentAddress: state.wallet.paymentAddress, publicKey: '' },
+        // Persist full wallet (publicKey included — it's public data, needed for signing).
+        // TTL expiry enforced in onRehydrateStorage via WALLET_SESSION_TTL_MS.
+        wallet: state.wallet,
+        connectedAt: state.connectedAt,
         etching: state.etching,
         // H1: Persist inscription file so page refresh during waiting doesn't lose it.
         // body is Uint8Array — JSON serialized as number array by default, revived on load.

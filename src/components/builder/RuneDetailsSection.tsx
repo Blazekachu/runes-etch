@@ -12,6 +12,7 @@ export default function RuneDetailsSection() {
   const updateEtching = useBuilderStore((s) => s.updateEtching);
   const setCurrentBlockHeight = useBuilderStore((s) => s.setCurrentBlockHeight);
   const wallet = useBuilderStore((s) => s.wallet);
+  const phase = useBuilderStore((s) => s.phase);
   const isTestnet =
     wallet.taprootAddress.startsWith('tb1') ||
     wallet.paymentAddress.startsWith('tb1');
@@ -54,14 +55,41 @@ export default function RuneDetailsSection() {
     return () => { cancelled = true; };
   }, []);
 
-  // Sync to store on every relevant change
+  // Sync local input state FROM store when store changes externally (bundle load, reset).
+  // Without these, useState's initial-value-only behavior would leave inputs at defaults
+  // showing placeholders even though the store has real bundle data.
+  useEffect(() => { setRuneName(etching.runeName); }, [etching.runeName]);
+  useEffect(() => { setSymbol(etching.symbol); }, [etching.symbol]);
+  useEffect(() => { setDivisibility(etching.divisibility); }, [etching.divisibility]);
   useEffect(() => {
+    const positions: number[] = [];
+    let mask = etching.spacers;
+    let bit = 0;
+    while (mask > 0) {
+      if (mask & 1) positions.push(bit);
+      mask >>= 1;
+      bit++;
+    }
+    setSpacerPositions(positions);
+  }, [etching.spacers]);
+
+  // Sync TO store on user edits. Gated on phase + equality guard: when phase !== 'building' the
+  // section is locked; when local matches store there's nothing to write. The guard kills the
+  // sync-from-store → setSpacerPositions(newArrayRef) → sync-back feedback loop dead.
+  useEffect(() => {
+    if (phase !== 'building') return;
     const mask =
       spacerPositions.length > 0 && runeName.length > 1
         ? spacerBitmask(runeName, spacerPositions)
         : 0;
+    if (
+      runeName === etching.runeName &&
+      symbol === etching.symbol &&
+      divisibility === etching.divisibility &&
+      mask === etching.spacers
+    ) return;
     updateEtching({ runeName, spacers: mask, symbol, divisibility });
-  }, [runeName, symbol, divisibility, spacerPositions]);
+  }, [runeName, symbol, divisibility, spacerPositions, phase, etching]);
 
   function handleNameChange(raw: string) {
     const upper = raw.toUpperCase().replace(/[^A-Z]/g, '');

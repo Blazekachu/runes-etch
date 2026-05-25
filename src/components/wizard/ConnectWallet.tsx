@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { connectWallet, type WalletProvider } from '@/lib/wallet/xverse';
+import { connectWallet, disconnectWallet, type WalletProvider } from '@/lib/wallet/xverse';
 import { useEtchStore } from '@/store/etchStore';
 import { setMempoolNetwork } from '@/lib/api/mempool';
 import { setOrdinalsTestnet } from '@/lib/api/ordinals';
@@ -77,9 +77,17 @@ export default function ConnectWallet({ onNext }: { onNext?: () => void; onBack?
       {wallet.connected ? (
         <div className="flex flex-col items-center gap-6 w-full max-w-lg">
           <div className="w-full rounded-lg border border-gray-700 bg-gray-900 p-4 flex flex-col gap-3">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" />
-              <span className="text-sm text-green-400 font-medium">Connected</span>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" />
+                <span className="text-sm text-green-400 font-medium">Connected</span>
+              </div>
+              <button
+                onClick={() => setWallet(disconnectWallet())}
+                className="text-xs text-gray-500 hover:text-red-400 transition-colors"
+              >
+                Disconnect
+              </button>
             </div>
             <div className="flex flex-col gap-1">
               <span className="text-xs text-gray-500 uppercase tracking-wider">Taproot / Ordinals</span>

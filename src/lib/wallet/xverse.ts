@@ -22,8 +22,11 @@ export async function connectWallet(provider: WalletProvider = 'sats-connect'): 
     return connectLeather();
   }
 
-  const response = await Wallet.request('getAddresses', {
-    purposes: [AddressPurpose.Ordinals, AddressPurpose.Payment],
+  // Xverse 2.3+ rejects `getAddresses` with ACCESS_DENIED. `wallet_connect` is the
+  // supported method, and it always renders the wallet-picker / approval popup
+  // (no silent cached-approval like the old getAddresses).
+  const response = await Wallet.request('wallet_connect', {
+    addresses: [AddressPurpose.Ordinals, AddressPurpose.Payment],
     message: 'Connect to Runes Etch Platform',
   });
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { connectWallet, type WalletProvider } from '@/lib/wallet/xverse';
+import { connectWallet, disconnectWallet, type WalletProvider } from '@/lib/wallet/xverse';
 import { useBuilderStore } from '@/store/builderStore';
 import { setMempoolNetwork, getCurrentBlockHeight } from '@/lib/api/mempool';
 import { setOrdinalsTestnet } from '@/lib/api/ordinals';
@@ -52,6 +52,14 @@ export default function WalletHeader() {
               <span className="font-mono text-xs text-gray-300 truncate">{truncate(wallet.taprootAddress)}</span>
               <span className="font-mono text-xs text-gray-500 truncate">{truncate(wallet.paymentAddress)}</span>
             </div>
+            <button
+              onClick={() => setWallet(disconnectWallet())}
+              title="Disconnect wallet"
+              aria-label="Disconnect wallet"
+              className="shrink-0 rounded-md border border-gray-700 hover:border-red-500 hover:text-red-400 text-gray-500 transition-colors w-6 h-6 flex items-center justify-center text-sm leading-none"
+            >
+              ×
+            </button>
           </div>
         ) : (
           <div className="flex items-center gap-2">
