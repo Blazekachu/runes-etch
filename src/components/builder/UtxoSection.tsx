@@ -48,6 +48,9 @@ export default function UtxoSection() {
   const inscriptionFile = useBuilderStore((s) => s.inscriptionFile);
   const delegateInscriptionId = useBuilderStore((s) => s.delegateInscriptionId);
   const selectedFeeRate = useBuilderStore((s) => s.selectedFeeRate);
+  const primaryUtxoId = useBuilderStore((s) => s.primaryUtxoId);
+  const setPrimaryUtxoId = useBuilderStore((s) => s.setPrimaryUtxoId);
+  const effectivePrimaryUtxoId = useBuilderStore((s) => s.effectivePrimaryUtxoId);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -203,21 +206,37 @@ export default function UtxoSection() {
     }
   }
 
+  // Primary picker is only relevant when the etch will produce an inscription:
+  // ord assigns the inscription to the first sat of vin 0, which is the primary UTXO.
+  // For pure-rune etches the runestone is in OP_RETURN and sat ordering doesn't matter.
+  const willInscribe = !!inscriptionFile || !!delegateInscriptionId;
+  const effectivePrimaryId = effectivePrimaryUtxoId();
+
   function renderUtxoRow(u: LabeledUtxo) {
     const key = `${u.txid}:${u.vout}`;
     const isParent = isParentUtxo(u);
     const selectable = isSelectableStatic(u, parentInscription);
+    const isExplicitPrimary = primaryUtxoId === key;
+    const isEffectivePrimary = effectivePrimaryId === key;
+
     return (
-      <button
+      <div
         key={key}
+        role="button"
+        tabIndex={selectable ? 0 : -1}
         onClick={() => selectable && toggleUtxoSelection(u.txid, u.vout)}
-        disabled={!selectable}
+        onKeyDown={(e) => {
+          if (selectable && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault();
+            toggleUtxoSelection(u.txid, u.vout);
+          }
+        }}
         className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors border-b border-gray-800 last:border-b-0 ${
           !selectable
             ? 'bg-gray-900/50 opacity-50 cursor-not-allowed'
             : u.selected
-            ? 'bg-orange-500/10 hover:bg-orange-500/15'
-            : 'bg-gray-900 hover:bg-gray-800'
+            ? 'bg-orange-500/10 hover:bg-orange-500/15 cursor-pointer'
+            : 'bg-gray-900 hover:bg-gray-800 cursor-pointer'
         }`}
       >
         <span className={`w-4 h-4 rounded border shrink-0 flex items-center justify-center transition-colors ${
@@ -235,7 +254,34 @@ export default function UtxoSection() {
         {isParent && (
           <span className="shrink-0 rounded bg-purple-500/20 px-1.5 py-0.5 text-xs text-purple-400 font-semibold">parent</span>
         )}
-      </button>
+        {/* Primary star — only shown when there will be an inscription and the row is selected.
+            Click sets/clears explicit primary. Empty star + (auto) marks the auto-fallback. */}
+        {willInscribe && u.selected && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setPrimaryUtxoId(isExplicitPrimary ? null : key);
+            }}
+            title={
+              isExplicitPrimary
+                ? 'Primary UTXO (click to clear — will auto-fall-back to largest)'
+                : isEffectivePrimary
+                ? 'Auto-selected as primary (largest selected). Click to lock this choice.'
+                : 'Click to make this the primary UTXO (its sat 0 receives the inscription)'
+            }
+            className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold transition-colors ${
+              isExplicitPrimary
+                ? 'text-yellow-300 hover:text-yellow-200'
+                : isEffectivePrimary
+                ? 'text-yellow-500/60 hover:text-yellow-400'
+                : 'text-gray-600 hover:text-yellow-400'
+            }`}
+          >
+            {isExplicitPrimary ? '★ Primary' : isEffectivePrimary ? '★ auto' : '☆'}
+          </button>
+        )}
+      </div>
     );
   }
 
@@ -253,6 +299,21 @@ export default function UtxoSection() {
             {loading ? 'Loading…' : 'Refresh'}
           </button>
         </div>
+
+        {/* Primary-UTXO explainer — only when an inscription is in play */}
+        {willInscribe && (
+          <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/5 px-4 py-3 flex flex-col gap-1">
+            <p className="text-xs text-yellow-300 font-semibold">★ Primary UTXO controls the inscribed sat</p>
+            <p className="text-xs text-gray-400">
+              The primary UTXO becomes vin 0 of the commit TX. Ord assigns the inscription to its
+              first sat (offset 0). To inscribe on a specific rare sat, pre-isolate it in your ord
+              wallet so it sits at offset 0 of a UTXO, then pick that UTXO as primary here.
+            </p>
+            <p className="text-xs text-gray-500">
+              No pick? The largest selected UTXO is auto-promoted (marked “★ auto”).
+            </p>
+          </div>
+        )}
 
         {/* Estimated cost */}
         <div className="rounded-lg border border-gray-800 bg-gray-900 px-4 py-3 flex flex-col gap-2">
@@ -365,6 +426,17 @@ export default function UtxoSection() {
                 {totalSats.toLocaleString()} sats
               </span>
             </div>
+            {willInscribe && effectivePrimaryId && (
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-gray-500">
+                  Inscribes on sat 0 of{' '}
+                  <span className={primaryUtxoId ? 'text-yellow-300' : 'text-yellow-500/60'}>
+                    {primaryUtxoId ? 'primary' : 'auto-primary'}
+                  </span>
+                </span>
+                <span className="font-mono text-gray-400">{effectivePrimaryId.slice(0, 8)}…:{effectivePrimaryId.split(':')[1]}</span>
+              </div>
+            )}
             <div className="flex items-center justify-between text-xs">
               <span className="text-gray-500">Change returns to</span>
               <span className="font-mono text-gray-400">payment address</span>

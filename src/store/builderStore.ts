@@ -132,6 +132,18 @@ interface BuilderStore {
   toggleUtxoSelection: (txid: string, vout: number) => void;
   selectedUtxos: () => LabeledUtxo[];
   changeAddress: () => string;
+  /**
+   * Explicit "primary" UTXO id (`txid:vout`) — becomes vin 0 of the commit / quick TX.
+   * Inscriptions land on the first sat of vin 0, so the primary UTXO controls which sat
+   * receives the etch. null = no explicit choice (UI auto-falls-back to the largest
+   * selected via `effectivePrimaryUtxoId`).
+   */
+  primaryUtxoId: string | null;
+  setPrimaryUtxoId: (id: string | null) => void;
+  /** Effective primary: explicit if set + still selected; otherwise largest selected; else null. */
+  effectivePrimaryUtxoId: () => string | null;
+  /** Selected UTXOs ordered with effective primary first — pass this to TX builders. */
+  orderedFundingUtxos: () => LabeledUtxo[];
 
   // Fees
   feeRates: FeeRates | null;
@@ -275,15 +287,46 @@ export const useBuilderStore = create<BuilderStore>()(
 
       utxos: [],
       setUtxos: (utxos) => set({ utxos }),
-      toggleUtxoSelection: (txid, vout) => set((state) => ({
-        utxos: state.utxos.map((u) =>
-          u.txid === txid && u.vout === vout ? { ...u, selected: !u.selected } : u
-        ),
-      })),
+      toggleUtxoSelection: (txid, vout) => set((state) => {
+        const id = `${txid}:${vout}`;
+        // If the user is deselecting the explicit primary, clear it — keeps the explicit choice
+        // honest. effectivePrimaryUtxoId will fall back to "largest selected" automatically.
+        const clearPrimary = state.primaryUtxoId === id;
+        return {
+          utxos: state.utxos.map((u) =>
+            u.txid === txid && u.vout === vout ? { ...u, selected: !u.selected } : u
+          ),
+          ...(clearPrimary ? { primaryUtxoId: null } : {}),
+        };
+      }),
       selectedUtxos: () => get().utxos.filter((u) => u.selected),
       changeAddress: () => {
         const w = get().wallet;
         return w.paymentAddress || w.taprootAddress;
+      },
+
+      primaryUtxoId: null,
+      setPrimaryUtxoId: (id) => set({ primaryUtxoId: id }),
+      effectivePrimaryUtxoId: () => {
+        const selected = get().utxos.filter((u) => u.selected);
+        if (selected.length === 0) return null;
+        const explicit = get().primaryUtxoId;
+        if (explicit && selected.some((u) => `${u.txid}:${u.vout}` === explicit)) {
+          return explicit;
+        }
+        // Auto-fallback: largest selected UTXO.
+        let largest = selected[0];
+        for (const u of selected) if (u.value > largest.value) largest = u;
+        return `${largest.txid}:${largest.vout}`;
+      },
+      orderedFundingUtxos: () => {
+        const selected = get().utxos.filter((u) => u.selected);
+        if (selected.length === 0) return [];
+        const primaryId = get().effectivePrimaryUtxoId();
+        if (!primaryId) return selected;
+        const idx = selected.findIndex((u) => `${u.txid}:${u.vout}` === primaryId);
+        if (idx <= 0) return selected;
+        return [selected[idx], ...selected.slice(0, idx), ...selected.slice(idx + 1)];
       },
 
       feeRates: null,
@@ -392,6 +435,7 @@ export const useBuilderStore = create<BuilderStore>()(
         parentInscription: null,
         pendingParentId: null,
         utxos: [],
+        primaryUtxoId: null,
         feeRates: null,
         selectedFeeRate: 10,
         vanityConfig: { prefix: '', suffix: '' },
@@ -436,6 +480,7 @@ export const useBuilderStore = create<BuilderStore>()(
         delegateInscriptionId: state.delegateInscriptionId,
         parentInscription: state.parentInscription,
         pendingParentId: state.pendingParentId,
+        primaryUtxoId: state.primaryUtxoId,
         commitState: state.commitState ? { txid: state.commitState.txid, rawHex: '', confirmations: state.commitState.confirmations, commitOutputIndex: state.commitState.commitOutputIndex, commitOutputValue: state.commitState.commitOutputValue, changeAddress: state.commitState.changeAddress } : null,
         vanityConfig: state.vanityConfig,
         vanityLocktime: state.vanityLocktime,

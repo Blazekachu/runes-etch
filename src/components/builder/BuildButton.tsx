@@ -27,7 +27,7 @@ export default function BuildButton() {
   const setCommitState = useBuilderStore((s) => s.setCommitState);
   const setCachedTapscript = useBuilderStore((s) => s.setCachedTapscript);
   const setQuickTxid = useBuilderStore((s) => s.setQuickTxid);
-  const selectedUtxos = useBuilderStore((s) => s.selectedUtxos);
+  const orderedFundingUtxos = useBuilderStore((s) => s.orderedFundingUtxos);
   const getChangeAddress = useBuilderStore((s) => s.changeAddress);
   const commitState = useBuilderStore((s) => s.commitState);
 
@@ -48,7 +48,9 @@ export default function BuildButton() {
   // Only visible during building phase
   if (phase !== 'building') return null;
 
-  const selected = selectedUtxos();
+  // Use the ordered list — primary UTXO is first, so it becomes vin 0 of commit/quick TX.
+  // Inscription lands on the first sat of vin 0, so primary controls the rune/inscription's sat.
+  const selected = orderedFundingUtxos();
   const hasVanity = vanityConfig.prefix.length > 0 || vanityConfig.suffix.length > 0;
   const isQuick = detectedMode === 'quick';
 
