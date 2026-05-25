@@ -66,6 +66,8 @@ export interface LabeledUtxo extends Utxo {
   label: 'plain' | 'inscription' | 'rune' | 'unknown';
   selected: boolean;
   source: 'taproot' | 'payment';
+  /** Inscription IDs on this UTXO (populated when label === 'inscription'). Used by reinscribe flow. */
+  inscriptionIds?: string[];
 }
 
 // --- Fee Types ---

@@ -109,24 +109,30 @@ export async function fetchUtxoSatInfo(
   return result;
 }
 
+export interface UtxoLabel {
+  label: 'plain' | 'inscription' | 'rune' | 'unknown';
+  /** Inscription IDs on this UTXO when label === 'inscription'. Empty otherwise. */
+  inscriptionIds: string[];
+}
+
 export async function labelUtxos(
   utxos: Array<{ txid: string; vout: number }>
-): Promise<Map<string, 'plain' | 'inscription' | 'rune' | 'unknown'>> {
-  const labels = new Map<string, 'plain' | 'inscription' | 'rune' | 'unknown'>();
+): Promise<Map<string, UtxoLabel>> {
+  const labels = new Map<string, UtxoLabel>();
 
   async function labelOne(utxo: { txid: string; vout: number }) {
     const key = `${utxo.txid}:${utxo.vout}`;
     try {
       const output = await getOutput(utxo.txid, utxo.vout);
       if (output.inscriptions.length > 0) {
-        labels.set(key, 'inscription');
+        labels.set(key, { label: 'inscription', inscriptionIds: output.inscriptions });
       } else if (Object.keys(output.runes).length > 0) {
-        labels.set(key, 'rune');
+        labels.set(key, { label: 'rune', inscriptionIds: [] });
       } else {
-        labels.set(key, 'plain');
+        labels.set(key, { label: 'plain', inscriptionIds: [] });
       }
     } catch {
-      labels.set(key, 'unknown');
+      labels.set(key, { label: 'unknown', inscriptionIds: [] });
     }
   }
 

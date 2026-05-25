@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { fetchUtxos } from '@/lib/api/mempool';
-import { labelUtxos, fetchUtxoSatInfo, isOrdinalsTestnet } from '@/lib/api/ordinals';
+import { labelUtxos, fetchUtxoSatInfo, isOrdinalsTestnet, type UtxoLabel } from '@/lib/api/ordinals';
 import type { LabeledUtxo, SatRarity } from '@/types';
 import SectionWrapper from './SectionWrapper';
 
@@ -32,10 +32,17 @@ function estimateCost(
   return commitOutputValue + commitFee;
 }
 
-/** Pure function version of isSelectable (no hooks dependency) */
-function isSelectableStatic(u: LabeledUtxo, parent: { txid: string; vout: number } | null): boolean {
+/** Pure function version of isSelectable (no hooks dependency).
+ *  Reinscribe mode unlocks inscription-labeled UTXOs (rune-labeled stay blocked — burn risk). */
+function isSelectableStatic(
+  u: LabeledUtxo,
+  parent: { txid: string; vout: number } | null,
+  reinscribeMode: boolean,
+): boolean {
   if (parent && u.txid === parent.txid && u.vout === parent.vout) return false;
-  return u.label === 'plain';
+  if (u.label === 'plain') return true;
+  if (reinscribeMode && u.label === 'inscription') return true;
+  return false;
 }
 
 export default function UtxoSection() {
@@ -53,6 +60,8 @@ export default function UtxoSection() {
   const effectivePrimaryUtxoId = useBuilderStore((s) => s.effectivePrimaryUtxoId);
   const utxoSatInfo = useBuilderStore((s) => s.utxoSatInfo);
   const mergeUtxoSatInfo = useBuilderStore((s) => s.mergeUtxoSatInfo);
+  const reinscribeMode = useBuilderStore((s) => s.reinscribeMode);
+  const setReinscribeMode = useBuilderStore((s) => s.setReinscribeMode);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -141,18 +150,22 @@ export default function UtxoSection() {
       const taprootList = allRaw.filter((u) => u.source === 'taproot');
       const paymentList = allRaw.filter((u) => u.source === 'payment');
 
-      let labelMap = new Map<string, 'plain' | 'inscription' | 'rune' | 'unknown'>();
+      let labelMap = new Map<string, UtxoLabel>();
       let labelWarning = false;
       if (taprootList.length > 0) {
         try { labelMap = await labelUtxos(taprootList); } catch { labelWarning = true; }
       }
 
       const labeled: LabeledUtxo[] = [
-        ...taprootList.map((u) => ({
-          ...u,
-          label: (labelMap.get(`${u.txid}:${u.vout}`) ?? 'plain') as LabeledUtxo['label'],
-          selected: false,
-        })),
+        ...taprootList.map((u) => {
+          const info = labelMap.get(`${u.txid}:${u.vout}`);
+          return {
+            ...u,
+            label: info?.label ?? 'plain',
+            selected: false,
+            inscriptionIds: info?.inscriptionIds,
+          };
+        }),
         ...paymentList.map((u) => ({
           ...u,
           label: 'plain' as const,
@@ -174,7 +187,7 @@ export default function UtxoSection() {
   /** Pick minimum UTXOs to cover estCost. Prefers payment, largest first. */
   const smartSelect = useCallback((currentUtxos: LabeledUtxo[]) => {
     const available = currentUtxos
-      .filter((u) => isSelectableStatic(u, parentInscription))
+      .filter((u) => isSelectableStatic(u, parentInscription, reinscribeMode))
       .sort((a, b) => {
         if (a.source !== b.source) return a.source === 'payment' ? -1 : 1;
         return b.value - a.value;
@@ -196,7 +209,7 @@ export default function UtxoSection() {
   }, [estCost, parentInscription, setUtxos]);
 
   const canContinue = selectedList.length > 0;
-  const selectableUtxos = utxos.filter((u) => isSelectableStatic(u, parentInscription));
+  const selectableUtxos = utxos.filter((u) => isSelectableStatic(u, parentInscription, reinscribeMode));
   const paymentUtxos = utxos.filter((u) => u.source === 'payment');
   const taprootUtxos = utxos.filter((u) => u.source === 'taproot');
 
@@ -246,7 +259,7 @@ export default function UtxoSection() {
   function renderUtxoRow(u: LabeledUtxo) {
     const key = `${u.txid}:${u.vout}`;
     const isParent = isParentUtxo(u);
-    const selectable = isSelectableStatic(u, parentInscription);
+    const selectable = isSelectableStatic(u, parentInscription, reinscribeMode);
     const isExplicitPrimary = primaryUtxoId === key;
     const isEffectivePrimary = effectivePrimaryId === key;
 
@@ -297,6 +310,16 @@ export default function UtxoSection() {
         <span className={`text-xs font-medium shrink-0 ${labelColor(u.label)}`}>{labelText(u.label)}</span>
         {isParent && (
           <span className="shrink-0 rounded bg-purple-500/20 px-1.5 py-0.5 text-xs text-purple-400 font-semibold">parent</span>
+        )}
+        {/* Existing inscription IDs on this UTXO (reinscribe context) */}
+        {u.label === 'inscription' && u.inscriptionIds && u.inscriptionIds.length > 0 && (
+          <span
+            className="shrink-0 font-mono text-xs text-purple-300"
+            title={u.inscriptionIds.join('\n')}
+          >
+            {u.inscriptionIds[0].slice(0, 6)}…i{u.inscriptionIds[0].split('i').pop()}
+            {u.inscriptionIds.length > 1 && ` +${u.inscriptionIds.length - 1}`}
+          </span>
         )}
         {/* Primary star — only shown when there will be an inscription and the row is selected.
             Click sets/clears explicit primary. Empty star + (auto) marks the auto-fallback. */}
@@ -359,6 +382,33 @@ export default function UtxoSection() {
           </div>
         )}
 
+        {/* Reinscribe-mode toggle — only when an inscription is in play */}
+        {willInscribe && (
+          <div className="flex items-center justify-between rounded-lg border border-gray-700 bg-gray-900 px-4 py-3">
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <p className="text-sm font-medium text-white">Reinscribe on existing inscription</p>
+              <p className="text-xs text-gray-500">
+                Unlocks inscription-labeled UTXOs. The selected inscription UTXO becomes primary — your
+                new etch stacks as a subsequent inscription on the same sat (post-jubilee).
+              </p>
+            </div>
+            <button
+              onClick={() => setReinscribeMode(!reinscribeMode)}
+              role="switch"
+              aria-checked={reinscribeMode}
+              className={`shrink-0 relative inline-flex h-6 w-11 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${
+                reinscribeMode ? 'bg-orange-500' : 'bg-gray-700'
+              }`}
+            >
+              <span
+                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition-transform ${
+                  reinscribeMode ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+        )}
+
         {/* Estimated cost */}
         <div className="rounded-lg border border-gray-800 bg-gray-900 px-4 py-3 flex flex-col gap-2">
           <div className="flex items-center justify-between">
@@ -416,7 +466,7 @@ export default function UtxoSection() {
               Smart Select
             </button>
             <button
-              onClick={() => setUtxos(utxos.map((u) => ({ ...u, selected: isSelectableStatic(u, parentInscription) })))}
+              onClick={() => setUtxos(utxos.map((u) => ({ ...u, selected: isSelectableStatic(u, parentInscription, reinscribeMode) })))}
               disabled={selectableUtxos.length === 0}
               className="rounded-lg border border-gray-700 px-4 py-2 text-sm font-semibold text-gray-400 hover:border-gray-500 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
@@ -487,6 +537,36 @@ export default function UtxoSection() {
                 ★ Will inscribe on a <strong>{utxoSatInfo[effectivePrimaryId].rarity}</strong> sat — block {utxoSatInfo[effectivePrimaryId].block}, named <span className="font-mono">{utxoSatInfo[effectivePrimaryId].name}</span>
               </div>
             )}
+            {/* Reinscribe affirmation — when primary is an inscription UTXO */}
+            {willInscribe && reinscribeMode && (() => {
+              const primary = selectedList.find((u) => `${u.txid}:${u.vout}` === effectivePrimaryId);
+              if (!primary || primary.label !== 'inscription' || !primary.inscriptionIds?.length) return null;
+              return (
+                <div className="rounded border border-purple-500/40 bg-purple-500/10 px-2 py-1.5 text-xs text-purple-200 flex flex-col gap-0.5">
+                  <span>
+                    ★ Reinscribing — new etch will stack on the sat already holding{' '}
+                    <span className="font-mono">{primary.inscriptionIds.length} inscription{primary.inscriptionIds.length > 1 ? 's' : ''}</span>
+                  </span>
+                  <span className="text-purple-300/80 font-mono break-all">
+                    Existing: {primary.inscriptionIds[0]}
+                    {primary.inscriptionIds.length > 1 && ` (+${primary.inscriptionIds.length - 1} more)`}
+                  </span>
+                  <span className="text-purple-300/60">
+                    Originals are preserved on the same sat; your new inscription becomes seq #{primary.inscriptionIds.length}.
+                  </span>
+                </div>
+              );
+            })()}
+            {/* Soft warning — reinscribe mode is on but no inscription UTXO is primary */}
+            {willInscribe && reinscribeMode && (() => {
+              const primary = selectedList.find((u) => `${u.txid}:${u.vout}` === effectivePrimaryId);
+              if (primary?.label === 'inscription') return null;
+              return (
+                <div className="rounded border border-yellow-500/40 bg-yellow-500/10 px-2 py-1.5 text-xs text-yellow-300">
+                  Reinscribe mode on, but primary isn’t an inscription UTXO. Select an inscription UTXO — it’ll auto-promote to primary.
+                </div>
+              );
+            })()}
             <div className="flex items-center justify-between text-xs">
               <span className="text-gray-500">Change returns to</span>
               <span className="font-mono text-gray-400">payment address</span>

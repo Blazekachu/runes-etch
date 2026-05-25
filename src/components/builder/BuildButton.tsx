@@ -30,6 +30,7 @@ export default function BuildButton() {
   const orderedFundingUtxos = useBuilderStore((s) => s.orderedFundingUtxos);
   const getChangeAddress = useBuilderStore((s) => s.changeAddress);
   const commitState = useBuilderStore((s) => s.commitState);
+  const reinscribeMode = useBuilderStore((s) => s.reinscribeMode);
 
   const [loading, setLoading] = useState(false);
   const [grinding, setGrinding] = useState(false);
@@ -54,11 +55,18 @@ export default function BuildButton() {
   const hasVanity = vanityConfig.prefix.length > 0 || vanityConfig.suffix.length > 0;
   const isQuick = detectedMode === 'quick';
 
+  // In reinscribe mode, the first input (primary, vin 0) MUST be an inscription UTXO so the
+  // existing inscription's sat is the one carried into the commit output at offset 0.
+  // Building with reinscribe ON but a plain primary would silently produce a fresh inscription
+  // on a common sat, defeating the purpose. Block the build instead.
+  const reinscribePrimaryValid = !reinscribeMode || (selected.length > 0 && selected[0].label === 'inscription');
+
   const canBuild =
     wallet.connected &&
     !!etching.runeName &&
     selected.length > 0 &&
-    selectedFeeRate > 0;
+    selectedFeeRate > 0 &&
+    reinscribePrimaryValid;
 
   function deriveInternalPubkey(): Buffer {
     if (!/^[0-9a-f]+$/i.test(wallet.publicKey)) {

@@ -150,6 +150,15 @@ interface BuilderStore {
   effectivePrimaryUtxoId: () => string | null;
   /** Selected UTXOs ordered with effective primary first — pass this to TX builders. */
   orderedFundingUtxos: () => LabeledUtxo[];
+
+  /**
+   * Reinscribe mode: when ON, inscription-labeled UTXOs become selectable. The selected
+   * inscription UTXO is forced as primary so its sat (which holds the original inscription)
+   * becomes vin 0 → the new inscription stacks on the same sat in ord's index.
+   * Rune-labeled UTXOs remain blocked — rune burn protection.
+   */
+  reinscribeMode: boolean;
+  setReinscribeMode: (on: boolean) => void;
   /**
    * Cached rarity info per UTXO (key = `txid:vout`). Populated async after UTXO list loads
    * (mainnet only). UTXOs not in the map are either still loading or ord didn't return data
@@ -303,14 +312,20 @@ export const useBuilderStore = create<BuilderStore>()(
       setUtxos: (utxos) => set({ utxos }),
       toggleUtxoSelection: (txid, vout) => set((state) => {
         const id = `${txid}:${vout}`;
-        // If the user is deselecting the explicit primary, clear it — keeps the explicit choice
-        // honest. effectivePrimaryUtxoId will fall back to "largest selected" automatically.
+        const u = state.utxos.find((x) => x.txid === txid && x.vout === vout);
+        const isInscription = u?.label === 'inscription';
+        const willBeSelected = !u?.selected;
+        // If the user is deselecting the explicit primary, clear it.
         const clearPrimary = state.primaryUtxoId === id;
+        // In reinscribe mode, selecting an inscription UTXO auto-promotes it to primary
+        // (overriding any previous primary). This guarantees the inscribed sat ends up at
+        // vin 0 of the commit TX, which is required for the stacking to work in ord.
+        const autoPrimary = state.reinscribeMode && isInscription && willBeSelected;
         return {
-          utxos: state.utxos.map((u) =>
-            u.txid === txid && u.vout === vout ? { ...u, selected: !u.selected } : u
+          utxos: state.utxos.map((x) =>
+            x.txid === txid && x.vout === vout ? { ...x, selected: !x.selected } : x
           ),
-          ...(clearPrimary ? { primaryUtxoId: null } : {}),
+          ...(autoPrimary ? { primaryUtxoId: id } : clearPrimary ? { primaryUtxoId: null } : {}),
         };
       }),
       selectedUtxos: () => get().utxos.filter((u) => u.selected),
@@ -365,6 +380,17 @@ export const useBuilderStore = create<BuilderStore>()(
       utxoSatInfo: {},
       setUtxoSatInfo: (info) => set({ utxoSatInfo: info }),
       mergeUtxoSatInfo: (info) => set((state) => ({ utxoSatInfo: { ...state.utxoSatInfo, ...info } })),
+
+      reinscribeMode: false,
+      setReinscribeMode: (on) => set((state) => ({
+        reinscribeMode: on,
+        // Turning OFF reinscribe mode while an inscription UTXO is selected/primary would leave
+        // the user with an "unselectable but selected" state. Clear those.
+        ...(on ? {} : {
+          utxos: state.utxos.map((u) => u.label === 'inscription' && u.selected ? { ...u, selected: false } : u),
+          primaryUtxoId: state.utxos.some((u) => u.label === 'inscription' && `${u.txid}:${u.vout}` === state.primaryUtxoId) ? null : state.primaryUtxoId,
+        }),
+      })),
 
       feeRates: null,
       setFeeRates: (rates) => set({ feeRates: rates }),
@@ -474,6 +500,7 @@ export const useBuilderStore = create<BuilderStore>()(
         utxos: [],
         primaryUtxoId: null,
         utxoSatInfo: {},
+        reinscribeMode: false,
         feeRates: null,
         selectedFeeRate: 10,
         vanityConfig: { prefix: '', suffix: '' },
@@ -519,6 +546,7 @@ export const useBuilderStore = create<BuilderStore>()(
         parentInscription: state.parentInscription,
         pendingParentId: state.pendingParentId,
         primaryUtxoId: state.primaryUtxoId,
+        reinscribeMode: state.reinscribeMode,
         commitState: state.commitState ? { txid: state.commitState.txid, rawHex: '', confirmations: state.commitState.confirmations, commitOutputIndex: state.commitState.commitOutputIndex, commitOutputValue: state.commitState.commitOutputValue, changeAddress: state.commitState.changeAddress } : null,
         vanityConfig: state.vanityConfig,
         vanityLocktime: state.vanityLocktime,
