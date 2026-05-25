@@ -187,9 +187,14 @@ export function validateRuneName(
   if (nameValue < minValue) {
     const unlockHeight = computeUnlockHeight(name);
     const minName = u128ToRuneName(minValue);
+    // Use minName.length (the current minimum's actual length), not name.length —
+    // the protocol gates on the rune's u128 value, and shorter names unlock as the
+    // minimum value drops. Reporting "5-letter name is RBRWYI" was wrong when
+    // RBRWYI is 6 letters and 5-letter names aren't unlocked yet.
     return {
       valid: false,
-      error: `"${name}" unlocks at block ${unlockHeight.toLocaleString()}. Currently the minimum ${name.length}-letter name is "${minName}".`,
+      error: `"${name}" unlocks at block ${unlockHeight.toLocaleString()}. ` +
+        `Currently the minimum etchable name is "${minName}" (${minName.length} letters).`,
       unlockHeight,
     };
   }

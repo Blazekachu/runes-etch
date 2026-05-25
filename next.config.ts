@@ -1,15 +1,29 @@
 import type { NextConfig } from "next";
 
-const ORD_BASE_RAW = process.env.NEXT_PUBLIC_ORD_BASE;
-let ordExtraOrigin = '';
-if (ORD_BASE_RAW) {
-  try {
-    const origin = new URL(ORD_BASE_RAW).origin;
-    if (origin !== 'https://ordinals.com') ordExtraOrigin = ` ${origin}`;
-  } catch {
-    // ignore malformed NEXT_PUBLIC_ORD_BASE — runtime will surface the error
+// Collect every configured ord origin (mainnet + testnet + legacy single value),
+// dedupe, drop the public default, and append the remainder to connect-src.
+// This way per-network ord overrides (e.g. local testnet ord while mainnet stays
+// on ordinals.com) both pass CSP without anyone having to edit this file.
+function buildOrdExtraOrigins(): string {
+  const candidates = [
+    process.env.NEXT_PUBLIC_ORD_BASE_MAINNET,
+    process.env.NEXT_PUBLIC_ORD_BASE_TESTNET,
+    process.env.NEXT_PUBLIC_ORD_BASE,
+  ];
+  const origins = new Set<string>();
+  for (const raw of candidates) {
+    if (!raw) continue;
+    try {
+      const origin = new URL(raw).origin;
+      if (origin !== 'https://ordinals.com') origins.add(origin);
+    } catch {
+      // ignore malformed value — runtime will surface the error
+    }
   }
+  return origins.size > 0 ? ' ' + [...origins].join(' ') : '';
 }
+
+const ordExtraOrigin = buildOrdExtraOrigins();
 
 const nextConfig: NextConfig = {
   headers: async () => [

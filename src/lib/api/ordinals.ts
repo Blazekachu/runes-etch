@@ -1,13 +1,46 @@
 import type { OrdRuneResponse, OrdInscriptionResponse, OrdOutputResponse, OrdSatResponse, ParentInscription, UtxoSatInfo } from '@/types';
 import { mempoolBaseForAddress } from './mempool';
 
-const ORD_BASE = (process.env.NEXT_PUBLIC_ORD_BASE || 'https://ordinals.com').replace(/\/+$/, '');
+const PUBLIC_ORD_DEFAULT = 'https://ordinals.com';
+
+/**
+ * Per-network ord base URL. Setting either env var lets the user point that network
+ * at their own indexer (e.g. local testnet4 ord at 127.0.0.1:8080) while keeping the
+ * other network on a public indexer. Legacy `NEXT_PUBLIC_ORD_BASE` still works as a
+ * single-value fallback that applies to both networks (back-compat).
+ */
+const ORD_BASE_MAINNET = (
+  process.env.NEXT_PUBLIC_ORD_BASE_MAINNET ||
+  process.env.NEXT_PUBLIC_ORD_BASE ||
+  PUBLIC_ORD_DEFAULT
+).replace(/\/+$/, '');
+
+const ORD_BASE_TESTNET = (
+  process.env.NEXT_PUBLIC_ORD_BASE_TESTNET ||
+  process.env.NEXT_PUBLIC_ORD_BASE ||
+  PUBLIC_ORD_DEFAULT
+).replace(/\/+$/, '');
+
 const FETCH_TIMEOUT_MS = 15000;
 
 /** Returns true if the current session is on testnet (set after wallet connect) */
 let _isTestnet = false;
 export function setOrdinalsTestnet(address: string): void {
   _isTestnet = address.startsWith('tb1') || address.startsWith('2') || address.startsWith('m') || address.startsWith('n');
+}
+
+/** Active ord base for the current session's network. */
+function ordBase(): string {
+  return _isTestnet ? ORD_BASE_TESTNET : ORD_BASE_MAINNET;
+}
+
+/**
+ * True when the current network's ord base is the public default (ordinals.com).
+ * Used to decide whether testnet calls should skip — they should only skip when
+ * the user hasn't configured a custom testnet indexer (public ord is mainnet-only).
+ */
+function isPublicOrdForCurrentNetwork(): boolean {
+  return ordBase() === PUBLIC_ORD_DEFAULT;
 }
 
 function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
@@ -22,9 +55,12 @@ const TXID_RE = /^[0-9a-f]{64}$/i;
 
 export async function checkRuneNameAvailable(name: string): Promise<boolean> {
   if (!RUNE_NAME_RE.test(name)) throw new Error(`Invalid rune name: ${name}`);
-  // ordinals.com is mainnet-only — skip on testnet (always "available")
-  if (_isTestnet) return true;
-  const res = await fetchWithTimeout(`${ORD_BASE}/rune/${encodeURIComponent(name)}`, {
+  // Skip only when on testnet AND no custom testnet indexer is configured.
+  // Public ordinals.com is mainnet-only — querying it for a testnet name
+  // returns mainnet data, which is meaningless. With a local testnet ord
+  // configured via NEXT_PUBLIC_ORD_BASE_TESTNET, the check is meaningful.
+  if (_isTestnet && isPublicOrdForCurrentNetwork()) return true;
+  const res = await fetchWithTimeout(`${ordBase()}/rune/${encodeURIComponent(name)}`, {
     headers: { Accept: 'application/json' },
   });
   if (res.status === 404) return true;
@@ -36,7 +72,7 @@ export async function getInscription(
   inscriptionId: string
 ): Promise<OrdInscriptionResponse> {
   if (!INSCRIPTION_ID_RE.test(inscriptionId)) throw new Error(`Invalid inscription ID: ${inscriptionId}`);
-  const res = await fetchWithTimeout(`${ORD_BASE}/inscription/${encodeURIComponent(inscriptionId)}`, {
+  const res = await fetchWithTimeout(`${ordBase()}/inscription/${encodeURIComponent(inscriptionId)}`, {
     headers: { Accept: 'application/json' },
   });
   if (!res.ok) throw new Error(`Inscription not found: ${inscriptionId}`);
@@ -49,7 +85,7 @@ export async function getOutput(
 ): Promise<OrdOutputResponse> {
   if (!TXID_RE.test(txid)) throw new Error(`Invalid txid: ${txid}`);
   if (!Number.isInteger(vout) || vout < 0) throw new Error(`Invalid vout: ${vout}`);
-  const res = await fetchWithTimeout(`${ORD_BASE}/output/${encodeURIComponent(txid)}:${vout}`, {
+  const res = await fetchWithTimeout(`${ordBase()}/output/${encodeURIComponent(txid)}:${vout}`, {
     headers: { Accept: 'application/json' },
   });
   if (!res.ok) throw new Error(`Output not found: ${txid}:${vout}`);
@@ -64,7 +100,7 @@ export function isOrdinalsTestnet(): boolean {
 /** Fetch a single sat's rarity / name / block from ord. */
 export async function getSat(satNumber: number): Promise<OrdSatResponse> {
   if (!Number.isInteger(satNumber) || satNumber < 0) throw new Error(`Invalid sat number: ${satNumber}`);
-  const res = await fetchWithTimeout(`${ORD_BASE}/sat/${satNumber}`, {
+  const res = await fetchWithTimeout(`${ordBase()}/sat/${satNumber}`, {
     headers: { Accept: 'application/json' },
   });
   if (!res.ok) throw new Error(`Sat lookup failed: ${res.status}`);
@@ -75,14 +111,14 @@ const LABEL_CONCURRENCY = 5;
 
 /**
  * For each UTXO, fetch its first sat's rarity info via ord's /output then /sat.
- * Mainnet-only — testnet has no canonical ord indexer, returns empty map.
- * Skips UTXOs where ord doesn't return sat_ranges (unindexed / spent).
+ * Skips on testnet ONLY when no custom indexer is configured — with a local
+ * testnet ord, rarity info is meaningful and we should query it.
  */
 export async function fetchUtxoSatInfo(
   utxos: Array<{ txid: string; vout: number }>
 ): Promise<Map<string, UtxoSatInfo>> {
   const result = new Map<string, UtxoSatInfo>();
-  if (_isTestnet) return result;
+  if (_isTestnet && isPublicOrdForCurrentNetwork()) return result;
 
   async function infoOne(utxo: { txid: string; vout: number }) {
     const key = `${utxo.txid}:${utxo.vout}`;
