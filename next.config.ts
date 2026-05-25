@@ -1,5 +1,16 @@
 import type { NextConfig } from "next";
 
+const ORD_BASE_RAW = process.env.NEXT_PUBLIC_ORD_BASE;
+let ordExtraOrigin = '';
+if (ORD_BASE_RAW) {
+  try {
+    const origin = new URL(ORD_BASE_RAW).origin;
+    if (origin !== 'https://ordinals.com') ordExtraOrigin = ` ${origin}`;
+  } catch {
+    // ignore malformed NEXT_PUBLIC_ORD_BASE — runtime will surface the error
+  }
+}
+
 const nextConfig: NextConfig = {
   headers: async () => [
     {
@@ -20,7 +31,7 @@ const nextConfig: NextConfig = {
             // modal (renders inline in the dapp page on `wallet_connect`).
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
             "font-src 'self' https://fonts.gstatic.com",
-            "connect-src 'self' https://mempool.space https://*.mempool.space https://ordinals.com",
+            `connect-src 'self' https://mempool.space https://*.mempool.space https://ordinals.com${ordExtraOrigin}`,
             "img-src 'self' data: blob:",
             "frame-ancestors 'none'",
           ].join('; '),

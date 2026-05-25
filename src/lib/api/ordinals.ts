@@ -1,7 +1,7 @@
 import type { OrdRuneResponse, OrdInscriptionResponse, OrdOutputResponse, OrdSatResponse, ParentInscription, UtxoSatInfo } from '@/types';
 import { mempoolBaseForAddress } from './mempool';
 
-const ORD_BASE = 'https://ordinals.com';
+const ORD_BASE = (process.env.NEXT_PUBLIC_ORD_BASE || 'https://ordinals.com').replace(/\/+$/, '');
 const FETCH_TIMEOUT_MS = 15000;
 
 /** Returns true if the current session is on testnet (set after wallet connect) */
