@@ -96,13 +96,14 @@ export default function UtxoSection() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [utxos]);
 
-  // Fetch sat-rarity info for taproot UTXOs in the background (mainnet only — ordinals.com is
-  // mainnet-exclusive). Payment-address UTXOs skipped: typically segwit, used for fee funding,
-  // not for the inscription's first-sat target.
+  // Fetch sat-rarity info for ALL plain UTXOs in the background (mainnet only — ordinals.com is
+  // mainnet-exclusive). Covers both taproot AND payment sources: rare sats can end up in either
+  // address if the user moved them with a non-ord-aware wallet, and we don't want to silently
+  // miss them. Inscription/rune-labeled UTXOs are already filtered upstream.
   useEffect(() => {
     if (utxos.length === 0 || isOrdinalsTestnet()) return;
-    const taprootList = utxos.filter((u) => u.source === 'taproot' && u.label === 'plain');
-    const toFetch = taprootList.filter((u) => !utxoSatInfo[`${u.txid}:${u.vout}`]);
+    const candidates = utxos.filter((u) => u.label === 'plain');
+    const toFetch = candidates.filter((u) => !utxoSatInfo[`${u.txid}:${u.vout}`]);
     if (toFetch.length === 0) return;
     let cancelled = false;
     fetchUtxoSatInfo(toFetch).then((map) => {

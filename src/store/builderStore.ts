@@ -4,8 +4,13 @@ import type {
   BuildPhase, WalletState, RuneEtching, RuneTerms,
   InscriptionFile, ParentInscription, LabeledUtxo,
   VanityConfig, VanityProgress, CommitTxState, FeeRates, CommitBundle,
-  UtxoSatInfo,
+  UtxoSatInfo, SatRarity,
 } from '@/types';
+
+/** Tier ranking for auto-primary fallback — picks rarer over more-common when no explicit primary. */
+const RARITY_RANK: Record<SatRarity, number> = {
+  common: 0, uncommon: 1, rare: 2, epic: 3, legendary: 4, mythic: 5,
+};
 import { minimumAtHeight, runeNameToU128 } from '@/lib/runes/names';
 
 /** Max age of a persisted wallet connection before it's discarded on page load. */
@@ -323,7 +328,26 @@ export const useBuilderStore = create<BuilderStore>()(
         if (explicit && selected.some((u) => `${u.txid}:${u.vout}` === explicit)) {
           return explicit;
         }
-        // Auto-fallback: largest selected UTXO.
+        // Auto-fallback: prefer the rarest (highest tier) non-common selected UTXO.
+        // If user selects a small rare-sat UTXO + a large fee UTXO without marking primary,
+        // this avoids accidentally auto-promoting the fee UTXO and wasting the inscription
+        // opportunity on a common sat. Tie-break by largest value within the same rarity tier.
+        const satInfo = get().utxoSatInfo;
+        let bestRare: { u: LabeledUtxo; rank: number } | null = null;
+        for (const u of selected) {
+          const info = satInfo[`${u.txid}:${u.vout}`];
+          if (!info || info.rarity === 'common') continue;
+          const rank = RARITY_RANK[info.rarity];
+          if (
+            !bestRare ||
+            rank > bestRare.rank ||
+            (rank === bestRare.rank && u.value > bestRare.u.value)
+          ) {
+            bestRare = { u, rank };
+          }
+        }
+        if (bestRare) return `${bestRare.u.txid}:${bestRare.u.vout}`;
+        // No non-common rarity info available — fall back to largest selected.
         let largest = selected[0];
         for (const u of selected) if (u.value > largest.value) largest = u;
         return `${largest.txid}:${largest.vout}`;
