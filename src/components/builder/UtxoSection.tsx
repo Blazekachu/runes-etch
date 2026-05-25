@@ -3,8 +3,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { fetchUtxos } from '@/lib/api/mempool';
-import { labelUtxos } from '@/lib/api/ordinals';
-import type { LabeledUtxo } from '@/types';
+import { labelUtxos, fetchUtxoSatInfo, isOrdinalsTestnet } from '@/lib/api/ordinals';
+import type { LabeledUtxo, SatRarity } from '@/types';
 import SectionWrapper from './SectionWrapper';
 
 /** Estimate how many sats the commit TX needs (commit output + 1-input commit fee). */
@@ -51,6 +51,8 @@ export default function UtxoSection() {
   const primaryUtxoId = useBuilderStore((s) => s.primaryUtxoId);
   const setPrimaryUtxoId = useBuilderStore((s) => s.setPrimaryUtxoId);
   const effectivePrimaryUtxoId = useBuilderStore((s) => s.effectivePrimaryUtxoId);
+  const utxoSatInfo = useBuilderStore((s) => s.utxoSatInfo);
+  const mergeUtxoSatInfo = useBuilderStore((s) => s.mergeUtxoSatInfo);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -91,6 +93,23 @@ export default function UtxoSection() {
     if (utxos.some((u) => u.selected)) return; // user already has a selection
     autoSelectedRef.current = true;
     smartSelect(utxos);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [utxos]);
+
+  // Fetch sat-rarity info for taproot UTXOs in the background (mainnet only — ordinals.com is
+  // mainnet-exclusive). Payment-address UTXOs skipped: typically segwit, used for fee funding,
+  // not for the inscription's first-sat target.
+  useEffect(() => {
+    if (utxos.length === 0 || isOrdinalsTestnet()) return;
+    const taprootList = utxos.filter((u) => u.source === 'taproot' && u.label === 'plain');
+    const toFetch = taprootList.filter((u) => !utxoSatInfo[`${u.txid}:${u.vout}`]);
+    if (toFetch.length === 0) return;
+    let cancelled = false;
+    fetchUtxoSatInfo(toFetch).then((map) => {
+      if (cancelled) return;
+      mergeUtxoSatInfo(Object.fromEntries(map));
+    }).catch(() => { /* swallowed — UI shows no badge for unfetched UTXOs */ });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [utxos]);
 
@@ -206,6 +225,17 @@ export default function UtxoSection() {
     }
   }
 
+  function rarityColor(r: SatRarity): string {
+    switch (r) {
+      case 'mythic': return 'bg-yellow-400/20 text-yellow-300 border border-yellow-400/40';
+      case 'legendary': return 'bg-red-500/20 text-red-300 border border-red-500/40';
+      case 'epic': return 'bg-orange-500/20 text-orange-300 border border-orange-500/40';
+      case 'rare': return 'bg-purple-500/20 text-purple-300 border border-purple-500/40';
+      case 'uncommon': return 'bg-blue-500/20 text-blue-300 border border-blue-500/40';
+      default: return 'bg-gray-800 text-gray-500';
+    }
+  }
+
   // Primary picker is only relevant when the etch will produce an inscription:
   // ord assigns the inscription to the first sat of vin 0, which is the primary UTXO.
   // For pure-rune etches the runestone is in OP_RETURN and sat ordering doesn't matter.
@@ -250,6 +280,19 @@ export default function UtxoSection() {
         </span>
         <span className="font-mono text-xs text-gray-300 flex-1 min-w-0">{truncateTxid(u.txid)}:{u.vout}</span>
         <span className="font-mono text-xs text-gray-300 shrink-0">{u.value.toLocaleString()} sats</span>
+        {/* Rarity badge (mainnet taproot only, non-common). Common/unfetched sats show nothing. */}
+        {(() => {
+          const info = utxoSatInfo[key];
+          if (!info || info.rarity === 'common') return null;
+          return (
+            <span
+              className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold ${rarityColor(info.rarity)}`}
+              title={`First sat: ${info.firstSat.toLocaleString()} (block ${info.block}, name ${info.name})`}
+            >
+              {info.rarity}
+            </span>
+          );
+        })()}
         <span className={`text-xs font-medium shrink-0 ${labelColor(u.label)}`}>{labelText(u.label)}</span>
         {isParent && (
           <span className="shrink-0 rounded bg-purple-500/20 px-1.5 py-0.5 text-xs text-purple-400 font-semibold">parent</span>
@@ -435,6 +478,12 @@ export default function UtxoSection() {
                   </span>
                 </span>
                 <span className="font-mono text-gray-400">{effectivePrimaryId.slice(0, 8)}…:{effectivePrimaryId.split(':')[1]}</span>
+              </div>
+            )}
+            {/* Affirmation when primary's first sat is non-common — surface the rarity loudly. */}
+            {willInscribe && effectivePrimaryId && utxoSatInfo[effectivePrimaryId] && utxoSatInfo[effectivePrimaryId].rarity !== 'common' && (
+              <div className={`rounded px-2 py-1.5 text-xs font-medium ${rarityColor(utxoSatInfo[effectivePrimaryId].rarity)}`}>
+                ★ Will inscribe on a <strong>{utxoSatInfo[effectivePrimaryId].rarity}</strong> sat — block {utxoSatInfo[effectivePrimaryId].block}, named <span className="font-mono">{utxoSatInfo[effectivePrimaryId].name}</span>
               </div>
             )}
             <div className="flex items-center justify-between text-xs">

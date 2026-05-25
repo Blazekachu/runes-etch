@@ -4,6 +4,7 @@ import type {
   BuildPhase, WalletState, RuneEtching, RuneTerms,
   InscriptionFile, ParentInscription, LabeledUtxo,
   VanityConfig, VanityProgress, CommitTxState, FeeRates, CommitBundle,
+  UtxoSatInfo,
 } from '@/types';
 import { minimumAtHeight, runeNameToU128 } from '@/lib/runes/names';
 
@@ -144,6 +145,14 @@ interface BuilderStore {
   effectivePrimaryUtxoId: () => string | null;
   /** Selected UTXOs ordered with effective primary first — pass this to TX builders. */
   orderedFundingUtxos: () => LabeledUtxo[];
+  /**
+   * Cached rarity info per UTXO (key = `txid:vout`). Populated async after UTXO list loads
+   * (mainnet only). UTXOs not in the map are either still loading or ord didn't return data
+   * for them. Not persisted — refetched per session since UTXOs change.
+   */
+  utxoSatInfo: Record<string, UtxoSatInfo>;
+  setUtxoSatInfo: (info: Record<string, UtxoSatInfo>) => void;
+  mergeUtxoSatInfo: (info: Record<string, UtxoSatInfo>) => void;
 
   // Fees
   feeRates: FeeRates | null;
@@ -329,6 +338,10 @@ export const useBuilderStore = create<BuilderStore>()(
         return [selected[idx], ...selected.slice(0, idx), ...selected.slice(idx + 1)];
       },
 
+      utxoSatInfo: {},
+      setUtxoSatInfo: (info) => set({ utxoSatInfo: info }),
+      mergeUtxoSatInfo: (info) => set((state) => ({ utxoSatInfo: { ...state.utxoSatInfo, ...info } })),
+
       feeRates: null,
       setFeeRates: (rates) => set({ feeRates: rates }),
       selectedFeeRate: 10,
@@ -436,6 +449,7 @@ export const useBuilderStore = create<BuilderStore>()(
         pendingParentId: null,
         utxos: [],
         primaryUtxoId: null,
+        utxoSatInfo: {},
         feeRates: null,
         selectedFeeRate: 10,
         vanityConfig: { prefix: '', suffix: '' },

@@ -1,4 +1,4 @@
-import type { OrdRuneResponse, OrdInscriptionResponse, OrdOutputResponse, ParentInscription } from '@/types';
+import type { OrdRuneResponse, OrdInscriptionResponse, OrdOutputResponse, OrdSatResponse, ParentInscription, UtxoSatInfo } from '@/types';
 import { mempoolBaseForAddress } from './mempool';
 
 const ORD_BASE = 'https://ordinals.com';
@@ -56,7 +56,58 @@ export async function getOutput(
   return res.json();
 }
 
+/** Returns true if ord-based sat tracking is unavailable (testnet, no canonical ord indexer). */
+export function isOrdinalsTestnet(): boolean {
+  return _isTestnet;
+}
+
+/** Fetch a single sat's rarity / name / block from ord. */
+export async function getSat(satNumber: number): Promise<OrdSatResponse> {
+  if (!Number.isInteger(satNumber) || satNumber < 0) throw new Error(`Invalid sat number: ${satNumber}`);
+  const res = await fetchWithTimeout(`${ORD_BASE}/sat/${satNumber}`, {
+    headers: { Accept: 'application/json' },
+  });
+  if (!res.ok) throw new Error(`Sat lookup failed: ${res.status}`);
+  return res.json();
+}
+
 const LABEL_CONCURRENCY = 5;
+
+/**
+ * For each UTXO, fetch its first sat's rarity info via ord's /output then /sat.
+ * Mainnet-only — testnet has no canonical ord indexer, returns empty map.
+ * Skips UTXOs where ord doesn't return sat_ranges (unindexed / spent).
+ */
+export async function fetchUtxoSatInfo(
+  utxos: Array<{ txid: string; vout: number }>
+): Promise<Map<string, UtxoSatInfo>> {
+  const result = new Map<string, UtxoSatInfo>();
+  if (_isTestnet) return result;
+
+  async function infoOne(utxo: { txid: string; vout: number }) {
+    const key = `${utxo.txid}:${utxo.vout}`;
+    try {
+      const output = await getOutput(utxo.txid, utxo.vout);
+      if (!output.sat_ranges || output.sat_ranges.length === 0) return;
+      const firstSat = output.sat_ranges[0][0];
+      const sat = await getSat(firstSat);
+      result.set(key, {
+        firstSat,
+        rarity: sat.rarity,
+        name: sat.name,
+        block: sat.block,
+      });
+    } catch {
+      // Leave unset — UI will show "?" / no badge for this UTXO
+    }
+  }
+
+  for (let i = 0; i < utxos.length; i += LABEL_CONCURRENCY) {
+    const batch = utxos.slice(i, i + LABEL_CONCURRENCY);
+    await Promise.all(batch.map(infoOne));
+  }
+  return result;
+}
 
 export async function labelUtxos(
   utxos: Array<{ txid: string; vout: number }>

@@ -155,6 +155,30 @@ export interface OrdOutputResponse {
   inscriptions: string[];
   runes: Record<string, { amount: number; divisibility: number }>;
   value: number;
+  /** Ord-style array of [start, end) sat ranges. First sat of the output = sat_ranges[0][0]. */
+  sat_ranges?: Array<[number, number]>;
+}
+
+export type SatRarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' | 'mythic';
+
+export interface OrdSatResponse {
+  number: number;
+  rarity: SatRarity;
+  name: string;
+  block: number;
+  cycle: number;
+  epoch: number;
+  period: number;
+  decimal: string;
+}
+
+/** Rarity info we cache per UTXO — derived from ord's /output + /sat endpoints. */
+export interface UtxoSatInfo {
+  /** First sat (offset 0) of this UTXO — the one ord would assign an inscription to. */
+  firstSat: number;
+  rarity: SatRarity;
+  name: string;
+  block: number;
 }
 
 // --- Bundle Types ---
