@@ -64,6 +64,9 @@ export default function UtxoSection() {
   const setReinscribeMode = useBuilderStore((s) => s.setReinscribeMode);
 
   const [loading, setLoading] = useState(false);
+  /** Taproot is fetched second and labelled via ord — separate spinner so the
+   *  payment list (already shown) doesn't get blanked while the slow walk runs. */
+  const [taprootLoading, setTaprootLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const autoSelectedRef = useRef(false);
 
@@ -126,73 +129,87 @@ export default function UtxoSection() {
   async function load() {
     if (!wallet.taprootAddress) return;
     setLoading(true);
+    setTaprootLoading(true);
     setError(null);
     autoSelectedRef.current = false;
+
+    // Ensure module-level mempool/ordinals network state matches the address.
+    // Critical when wallet was rehydrated from persist (handleConnect never ran).
     try {
-      // Ensure module-level mempool/ordinals network state matches the address.
-      // Critical when wallet was rehydrated from persist (handleConnect never ran).
       await setMempoolNetwork(wallet.taprootAddress);
       setOrdinalsTestnet(wallet.taprootAddress);
-      // Serial, not parallel: when one address has many UTXOs, /utxo 400s and
-      // falls back to walking /txs (40+ requests). Doing both addresses in
-      // parallel doubles the concurrent load on mempool.space and triggers
-      // rate-limit / timeout cascades. Sequential keeps the indexer happy.
+    } catch { /* setMempoolNetwork falls back to mainnet, non-fatal here */ }
+
+    const errorMsgs: string[] = [];
+    const friendly = (err: unknown): string => {
+      const raw = err instanceof Error ? err.message : String(err);
+      return /aborted|timed out/i.test(raw)
+        ? 'mempool.space timed out (transient under load — Refresh).'
+        : raw || 'Unknown error';
+    };
+
+    // Phase 1: PAYMENT first. Fast, what the user needs to pay fees.
+    // Render immediately so the user isn't blocked by the slow taproot walk.
+    let paymentLabeled: LabeledUtxo[] = [];
+    if (wallet.paymentAddress && wallet.paymentAddress !== wallet.taprootAddress) {
+      try {
+        const paymentRaw = await fetchUtxos(wallet.paymentAddress);
+        paymentLabeled = paymentRaw.map((u) => ({
+          ...u,
+          source: 'payment' as const,
+          label: 'plain' as const,
+          selected: false,
+        }));
+        setUtxos(paymentLabeled);
+        setLoading(false); // overall loading stops as soon as payment is in
+      } catch (err) {
+        errorMsgs.push(`Payment UTXOs: ${friendly(err)}`);
+        setLoading(false);
+      }
+    } else {
+      setLoading(false);
+    }
+
+    // Phase 2: TAPROOT. Slow when address has many UTXOs (/utxo 400s, falls
+    // back to /txs walk taking 30–60s). User can already pick fee UTXOs from
+    // payment while this runs.
+    try {
       const taprootRaw = await fetchUtxos(wallet.taprootAddress);
-      const paymentRaw =
-        wallet.paymentAddress && wallet.paymentAddress !== wallet.taprootAddress
-          ? await fetchUtxos(wallet.paymentAddress)
-          : [];
-
-      const seen = new Set<string>();
-      const allRaw = [];
-      for (const u of taprootRaw) {
-        const key = `${u.txid}:${u.vout}`;
-        if (!seen.has(key)) { seen.add(key); allRaw.push({ ...u, source: 'taproot' as const }); }
-      }
-      for (const u of paymentRaw) {
-        const key = `${u.txid}:${u.vout}`;
-        if (!seen.has(key)) { seen.add(key); allRaw.push({ ...u, source: 'payment' as const }); }
-      }
-
-      const taprootList = allRaw.filter((u) => u.source === 'taproot');
-      const paymentList = allRaw.filter((u) => u.source === 'payment');
 
       let labelMap = new Map<string, UtxoLabel>();
       let labelWarning = false;
-      if (taprootList.length > 0) {
-        try { labelMap = await labelUtxos(taprootList); } catch { labelWarning = true; }
+      if (taprootRaw.length > 0) {
+        try { labelMap = await labelUtxos(taprootRaw); } catch { labelWarning = true; }
       }
 
-      const labeled: LabeledUtxo[] = [
-        ...taprootList.map((u) => {
-          const info = labelMap.get(`${u.txid}:${u.vout}`);
-          return {
-            ...u,
-            label: info?.label ?? 'plain',
-            selected: false,
-            inscriptionIds: info?.inscriptionIds,
-          };
-        }),
-        ...paymentList.map((u) => ({
+      const seen = new Set(paymentLabeled.map((u) => `${u.txid}:${u.vout}`));
+      const taprootLabeled: LabeledUtxo[] = [];
+      for (const u of taprootRaw) {
+        const key = `${u.txid}:${u.vout}`;
+        if (seen.has(key)) continue;  // payment list already has it (shared output edge case)
+        const info = labelMap.get(key);
+        taprootLabeled.push({
           ...u,
-          label: 'plain' as const,
+          source: 'taproot' as const,
+          label: info?.label ?? 'plain',
           selected: false,
-        })),
-      ];
+          inscriptionIds: info?.inscriptionIds,
+        });
+      }
 
-      setUtxos(labeled);
+      // Merge: taproot at the top, payment below — UI groups them anyway.
+      setUtxos([...taprootLabeled, ...paymentLabeled]);
+
       if (labelWarning) {
-        setError('Could not label taproot UTXOs (ordinals API unavailable). All shown as plain — be careful not to spend inscriptions or runes.');
+        errorMsgs.push('Taproot labels unavailable (ordinals API) — all shown as plain. Verify before selecting.');
       }
     } catch (err) {
-      const raw = err instanceof Error ? err.message : String(err);
-      const friendly = /aborted|timed out/i.test(raw)
-        ? 'mempool.space timed out while loading UTXOs. This is usually transient under heavy load — try Refresh.'
-        : raw || 'Failed to load UTXOs';
-      setError(friendly);
+      errorMsgs.push(`Taproot UTXOs: ${friendly(err)} You can still etch from payment UTXOs alone.`);
     } finally {
-      setLoading(false);
+      setTaprootLoading(false);
     }
+
+    if (errorMsgs.length > 0) setError(errorMsgs.join(' '));
   }
 
   /** Pick minimum UTXOs to cover estCost. Prefers payment, largest first. */
@@ -454,13 +471,10 @@ export default function UtxoSection() {
 
         {loading && utxos.length === 0 && (
           <div className="flex flex-col gap-2">
-            {Array.from({ length: 4 }).map((_, i) => (
+            {Array.from({ length: 2 }).map((_, i) => (
               <div key={i} className="h-14 rounded-lg bg-gray-900 animate-pulse" />
             ))}
-            <p className="text-xs text-gray-500 mt-1">
-              Loading UTXOs… on addresses with hundreds of UTXOs the indexer falls
-              back to walking transaction history — this can take 30–60 seconds.
-            </p>
+            <p className="text-xs text-gray-500 mt-1">Loading payment UTXOs…</p>
           </div>
         )}
 
@@ -512,15 +526,32 @@ export default function UtxoSection() {
         )}
 
         {/* Taproot address UTXOs */}
-        {taprootUtxos.length > 0 && (
+        {(taprootUtxos.length > 0 || taprootLoading) && (
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-2 px-1 mb-1">
               <span className="text-xs font-semibold uppercase tracking-wider text-orange-400">Taproot</span>
               <span className="font-mono text-xs text-gray-500 truncate">{wallet.taprootAddress}</span>
+              {taprootLoading && (
+                <span className="text-xs text-gray-500 italic shrink-0">loading…</span>
+              )}
             </div>
-            <div className="rounded-lg border border-gray-800 overflow-hidden">
-              {taprootUtxos.map(renderUtxoRow)}
-            </div>
+            {taprootUtxos.length > 0 && (
+              <div className="rounded-lg border border-gray-800 overflow-hidden">
+                {taprootUtxos.map(renderUtxoRow)}
+              </div>
+            )}
+            {taprootLoading && taprootUtxos.length === 0 && (
+              <div className="flex flex-col gap-2">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="h-14 rounded-lg bg-gray-900 animate-pulse" />
+                ))}
+                <p className="text-xs text-gray-500 mt-1">
+                  Walking transaction history for taproot — can take 30–60 seconds on
+                  active addresses. Payment UTXOs above are ready; you can start picking
+                  fee UTXOs now.
+                </p>
+              </div>
+            )}
           </div>
         )}
 
