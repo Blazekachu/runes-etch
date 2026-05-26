@@ -7,9 +7,14 @@ import { labelUtxos, fetchUtxoSatInfo, isOrdinalsTestnet, setOrdinalsTestnet, ty
 import type { LabeledUtxo, SatRarity } from '@/types';
 import SectionWrapper from './SectionWrapper';
 
-/** Estimate how many sats the commit TX needs (commit output + 1-input commit fee). */
+/** Estimate how many sats the commit TX needs (commit output + 1-input commit fee).
+ *  Takes commit and reveal rates separately to match commit.ts — the reveal-budget
+ *  portion of commit.vout[0] is sized by revealFeeRate, the commit fee by
+ *  commitFeeRate. Caller should pass revealFeeRate = commitFeeRate when the user
+ *  picks "match commit" (i.e. selectedRevealFeeRate is null). */
 function estimateCost(
-  feeRate: number,
+  commitFeeRate: number,
+  revealFeeRate: number,
   hasInscription: boolean,
   hasParent: boolean,
   contentSize: number,
@@ -20,14 +25,14 @@ function estimateCost(
     (hasParent ? 57.5 : 0) +
     ((hasInscription ? 1 : 0) + (hasParent ? 1 : 0) + 1 + 1) * 43 + 50
   );
-  const revealFee = Math.ceil(revealVB * feeRate);
+  const revealFee = Math.ceil(revealVB * revealFeeRate);
   const inscDust = hasInscription ? 546 : 0;
   const parentDust = hasParent ? 546 : 0;
   const commitOutputValue = revealFee + inscDust + parentDust + 546;
 
   // Commit TX fee estimate (1 input, 2 outputs)
   const commitVB = Math.ceil(10.5 + 68 + 2 * 43); // use P2WPKH size (worst case)
-  const commitFee = Math.ceil(commitVB * feeRate);
+  const commitFee = Math.ceil(commitVB * commitFeeRate);
 
   return commitOutputValue + commitFee;
 }
@@ -55,6 +60,7 @@ export default function UtxoSection() {
   const inscriptionFile = useBuilderStore((s) => s.inscriptionFile);
   const delegateInscriptionId = useBuilderStore((s) => s.delegateInscriptionId);
   const selectedFeeRate = useBuilderStore((s) => s.selectedFeeRate);
+  const selectedRevealFeeRate = useBuilderStore((s) => s.selectedRevealFeeRate);
   const primaryUtxoId = useBuilderStore((s) => s.primaryUtxoId);
   const setPrimaryUtxoId = useBuilderStore((s) => s.setPrimaryUtxoId);
   const effectivePrimaryUtxoId = useBuilderStore((s) => s.effectivePrimaryUtxoId);
@@ -75,10 +81,19 @@ export default function UtxoSection() {
   const hasParent = !!parentInscription;
   const contentSize = inscriptionFile?.body.length ?? 0;
 
-  // Estimated cost in sats
+  // Estimated cost in sats. In commit-reveal mode, commit.vout[0] is sized by
+  // selectedRevealFeeRate (the reveal budget) so the user pre-funds reveal at
+  // up to that rate. When null, builder falls back to commit rate.
+  const effectiveRevealRate = selectedRevealFeeRate ?? selectedFeeRate;
   const estCost = isQuick
     ? Math.ceil((10.5 + 68 + 3 * 43 + 50) * selectedFeeRate) + 546 // quick: fee + dust for premine
-    : estimateCost(selectedFeeRate, hasInscription || !!delegateInscriptionId, hasParent, contentSize);
+    : estimateCost(
+        selectedFeeRate,
+        effectiveRevealRate,
+        hasInscription || !!delegateInscriptionId,
+        hasParent,
+        contentSize,
+      );
 
   const selectedList = utxos.filter((u) => u.selected);
   const totalSats = selectedList.reduce((acc, u) => acc + u.value, 0);
