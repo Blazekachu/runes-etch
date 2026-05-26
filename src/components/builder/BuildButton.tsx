@@ -37,6 +37,8 @@ export default function BuildButton() {
   const getChangeAddress = useBuilderStore((s) => s.changeAddress);
   const commitState = useBuilderStore((s) => s.commitState);
   const reinscribeMode = useBuilderStore((s) => s.reinscribeMode);
+  const targetUtxo = useBuilderStore((s) => s.targetUtxo);
+  const targetVerifyState = useBuilderStore((s) => s.targetVerifyState);
 
   const [loading, setLoading] = useState(false);
   const [grinding, setGrinding] = useState(false);
@@ -65,14 +67,25 @@ export default function BuildButton() {
   // existing inscription's sat is the one carried into the commit output at offset 0.
   // Building with reinscribe ON but a plain primary would silently produce a fresh inscription
   // on a common sat, defeating the purpose. Block the build instead.
-  const reinscribePrimaryValid = !reinscribeMode || (selected.length > 0 && selected[0].label === 'inscription');
+  //
+  // When the user has set + verified a sat/inscription target, that target IS vin[0] regardless
+  // of the picker, so this picker-side check is satisfied by definition.
+  const reinscribePrimaryValid =
+    !reinscribeMode ||
+    (targetUtxo && targetVerifyState === 'ok') ||
+    (selected.length > 0 && selected[0].label === 'inscription');
+
+  // If the user entered a target but verification failed (not owned / wrong offset / not found),
+  // refuse to build — the spec says: "show message and don't allow commit button to proceed".
+  const targetBlocking = targetVerifyState === 'error';
 
   const canBuild =
     wallet.connected &&
     !!etching.runeName &&
-    selected.length > 0 &&
+    (selected.length > 0 || (targetUtxo && targetVerifyState === 'ok')) &&
     selectedFeeRate > 0 &&
-    reinscribePrimaryValid;
+    reinscribePrimaryValid &&
+    !targetBlocking;
 
   function deriveInternalPubkey(): Buffer {
     if (!/^[0-9a-f]+$/i.test(wallet.publicKey)) {
@@ -86,15 +99,37 @@ export default function BuildButton() {
   }
 
   function buildFundingUtxos() {
-    return selected.map((u) => ({
+    const picker = selected.map((u) => ({
       ...u,
       address: u.source === 'payment' ? wallet.paymentAddress : wallet.taprootAddress,
     }));
+    // Target sat/inscription, when verified, is prepended as vin[0] — its sat is
+    // the one that flows to vout[0] (commit/quick output) and carries the inscription/rune.
+    // Skip if the picker already includes the same outpoint (avoid double-input).
+    if (targetUtxo && targetVerifyState === 'ok') {
+      const dupIdx = picker.findIndex((u) => u.txid === targetUtxo.txid && u.vout === targetUtxo.vout);
+      if (dupIdx >= 0) picker.splice(dupIdx, 1);
+      return [
+        {
+          txid: targetUtxo.txid,
+          vout: targetUtxo.vout,
+          value: targetUtxo.value,
+          status: { confirmed: true },
+          address: wallet.taprootAddress,
+        },
+        ...picker,
+      ];
+    }
+    return picker;
   }
 
   async function signAndBroadcastPsbt(psbt: bitcoin.Psbt, fee: number): Promise<string> {
+    // Use the same input list the PSBT was built with so dust + sign-indices match
+    // when a target UTXO is prepended as vin[0].
+    const fundingInputs = buildFundingUtxos();
+
     // Dust change check
-    const totalIn = selected.reduce((acc, u) => acc + BigInt(u.value), 0n);
+    const totalIn = fundingInputs.reduce((acc, u) => acc + BigInt(u.value), 0n);
     const changeValue = totalIn - BigInt(fee);
     if (changeValue > 0n && changeValue < 546n && dustConfirm !== Number(changeValue)) {
       setDustConfirm(Number(changeValue));
@@ -104,9 +139,9 @@ export default function BuildButton() {
     }
 
     const psbtBase64 = psbt.toBase64();
-    const inputsToSign = selected.map((u, i) => ({
+    const inputsToSign = fundingInputs.map((u, i) => ({
       index: i,
-      address: u.source === 'payment' ? wallet.paymentAddress : wallet.taprootAddress,
+      address: u.address,
     }));
 
     const signedBase64 = await signPsbt(psbtBase64, inputsToSign);
@@ -213,9 +248,11 @@ export default function BuildButton() {
     }
 
     const psbtBase64 = result.psbt.toBase64();
-    const inputsToSign = selected.map((u, i) => ({
+    // Sign indices must match the order in buildFundingUtxos (target UTXO at 0 when set).
+    const fundingInputs = buildFundingUtxos();
+    const inputsToSign = fundingInputs.map((u, i) => ({
       index: i,
-      address: u.source === 'payment' ? wallet.paymentAddress : wallet.taprootAddress,
+      address: u.address,
     }));
 
     const signedBase64 = await signPsbt(psbtBase64, inputsToSign);

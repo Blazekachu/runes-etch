@@ -11,6 +11,7 @@ import InscriptionSection from '@/components/builder/InscriptionSection';
 import ParentSection from '@/components/builder/ParentSection';
 import VanitySection from '@/components/builder/VanitySection';
 import UtxoSection from '@/components/builder/UtxoSection';
+import SatTargetSection from '@/components/builder/SatTargetSection';
 import FeeRateSection from '@/components/builder/FeeRateSection';
 import TxPreview from '@/components/builder/TxPreview';
 import BuildButton from '@/components/builder/BuildButton';
@@ -95,6 +96,7 @@ export default function EtchV2Page() {
         <InscriptionSection />
         <ParentSection />
         <VanitySection />
+        <SatTargetSection />
         <UtxoSection />
         <FeeRateSection />
 

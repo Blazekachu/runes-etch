@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { fetchUtxos, setMempoolNetwork } from '@/lib/api/mempool';
-import { labelUtxos, fetchUtxoSatInfo, isOrdinalsTestnet, setOrdinalsTestnet, type UtxoLabel } from '@/lib/api/ordinals';
+import { fetchUtxoSatInfo, isOrdinalsTestnet, setOrdinalsTestnet } from '@/lib/api/ordinals';
 import type { LabeledUtxo, SatRarity } from '@/types';
 import SectionWrapper from './SectionWrapper';
 
@@ -67,7 +67,6 @@ export default function UtxoSection() {
   const utxoSatInfo = useBuilderStore((s) => s.utxoSatInfo);
   const mergeUtxoSatInfo = useBuilderStore((s) => s.mergeUtxoSatInfo);
   const reinscribeMode = useBuilderStore((s) => s.reinscribeMode);
-  const setReinscribeMode = useBuilderStore((s) => s.setReinscribeMode);
 
   const [loading, setLoading] = useState(false);
   /** Taproot is fetched second and labelled via ord — separate spinner so the
@@ -185,44 +184,16 @@ export default function UtxoSection() {
       setLoading(false);
     }
 
-    // Phase 2: TAPROOT. Slow when address has many UTXOs (/utxo 400s, falls
-    // back to /txs walk taking 30–60s). User can already pick fee UTXOs from
-    // payment while this runs.
-    try {
-      const taprootRaw = await fetchUtxos(wallet.taprootAddress);
-
-      let labelMap = new Map<string, UtxoLabel>();
-      let labelWarning = false;
-      if (taprootRaw.length > 0) {
-        try { labelMap = await labelUtxos(taprootRaw); } catch { labelWarning = true; }
-      }
-
-      const seen = new Set(paymentLabeled.map((u) => `${u.txid}:${u.vout}`));
-      const taprootLabeled: LabeledUtxo[] = [];
-      for (const u of taprootRaw) {
-        const key = `${u.txid}:${u.vout}`;
-        if (seen.has(key)) continue;  // payment list already has it (shared output edge case)
-        const info = labelMap.get(key);
-        taprootLabeled.push({
-          ...u,
-          source: 'taproot' as const,
-          label: info?.label ?? 'plain',
-          selected: false,
-          inscriptionIds: info?.inscriptionIds,
-        });
-      }
-
-      // Merge: taproot at the top, payment below — UI groups them anyway.
-      setUtxos([...taprootLabeled, ...paymentLabeled]);
-
-      if (labelWarning) {
-        errorMsgs.push('Taproot labels unavailable (ordinals API) — all shown as plain. Verify before selecting.');
-      }
-    } catch (err) {
-      errorMsgs.push(`Taproot UTXOs: ${friendly(err)} You can still etch from payment UTXOs alone.`);
-    } finally {
-      setTaprootLoading(false);
-    }
+    // Phase 2: TAPROOT — DISABLED. We no longer enumerate taproot UTXOs because:
+    //  - /utxo 400s on addresses with many UTXOs (hoarder wallets), and
+    //  - the /txs walk fallback is slow and unreliable on active mainnet wallets.
+    //
+    // Users who need to target a specific sat or reinscribe on an existing
+    // inscription paste the sat# / inscription ID into SatTargetSection, which
+    // resolves it with a single ord call — no enumeration. Fresh etches just use
+    // payment UTXOs (the inscription lands on the first sat of vin[0] which is
+    // the payment UTXO sat). See SatTargetSection.tsx.
+    setTaprootLoading(false);
 
     if (errorMsgs.length > 0) setError(errorMsgs.join(' '));
   }
@@ -425,32 +396,10 @@ export default function UtxoSection() {
           </div>
         )}
 
-        {/* Reinscribe-mode toggle — only when an inscription is in play */}
-        {willInscribe && (
-          <div className="flex items-center justify-between rounded-lg border border-gray-700 bg-gray-900 px-4 py-3">
-            <div className="flex flex-col gap-0.5 min-w-0">
-              <p className="text-sm font-medium text-white">Reinscribe on existing inscription</p>
-              <p className="text-xs text-gray-500">
-                Unlocks inscription-labeled UTXOs. The selected inscription UTXO becomes primary — your
-                new etch stacks as a subsequent inscription on the same sat (post-jubilee).
-              </p>
-            </div>
-            <button
-              onClick={() => setReinscribeMode(!reinscribeMode)}
-              role="switch"
-              aria-checked={reinscribeMode}
-              className={`shrink-0 relative inline-flex h-6 w-11 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${
-                reinscribeMode ? 'bg-orange-500' : 'bg-gray-700'
-              }`}
-            >
-              <span
-                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition-transform ${
-                  reinscribeMode ? 'translate-x-5' : 'translate-x-0'
-                }`}
-              />
-            </button>
-          </div>
-        )}
+        {/* Reinscribe toggle removed — reinscription is now driven by SatTargetSection's
+            verified target (auto-detects inscriptions on the resolved UTXO and sets
+            reinscribeMode in the store). Toggling here without enumerated taproot UTXOs
+            was meaningless. */}
 
         {/* Estimated cost */}
         <div className="rounded-lg border border-gray-800 bg-gray-900 px-4 py-3 flex flex-col gap-2">
@@ -540,35 +489,10 @@ export default function UtxoSection() {
           </div>
         )}
 
-        {/* Taproot address UTXOs */}
-        {(taprootUtxos.length > 0 || taprootLoading) && (
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-2 px-1 mb-1">
-              <span className="text-xs font-semibold uppercase tracking-wider text-orange-400">Taproot</span>
-              <span className="font-mono text-xs text-gray-500 truncate">{wallet.taprootAddress}</span>
-              {taprootLoading && (
-                <span className="text-xs text-gray-500 italic shrink-0">loading…</span>
-              )}
-            </div>
-            {taprootUtxos.length > 0 && (
-              <div className="rounded-lg border border-gray-800 overflow-hidden">
-                {taprootUtxos.map(renderUtxoRow)}
-              </div>
-            )}
-            {taprootLoading && taprootUtxos.length === 0 && (
-              <div className="flex flex-col gap-2">
-                {Array.from({ length: 3 }).map((_, i) => (
-                  <div key={i} className="h-14 rounded-lg bg-gray-900 animate-pulse" />
-                ))}
-                <p className="text-xs text-gray-500 mt-1">
-                  Walking transaction history for taproot — can take 30–60 seconds on
-                  active addresses. Payment UTXOs above are ready; you can start picking
-                  fee UTXOs now.
-                </p>
-              </div>
-            )}
-          </div>
-        )}
+        {/* Taproot UTXOs intentionally not enumerated — see SatTargetSection for
+            the manual sat#/inscription input flow. Keeps the picker simple and
+            doesn't depend on mempool.space's /utxo or /txs walk surviving for
+            hoarder addresses. */}
 
         {/* Selection summary */}
         {selectedList.length > 0 && (

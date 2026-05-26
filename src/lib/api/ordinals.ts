@@ -180,6 +180,99 @@ export async function labelUtxos(
   return labels;
 }
 
+// ---------------------------------------------------------------------------
+// Sat / inscription target resolution (manual-entry alternative to enumeration)
+// ---------------------------------------------------------------------------
+
+export type ResolveTargetInput =
+  | { kind: 'sat'; satNumber: number }
+  | { kind: 'inscription'; inscriptionId: string };
+
+export type ResolveTargetResult =
+  | {
+      status: 'ok';
+      txid: string;
+      vout: number;
+      offset: number;
+      value: number;
+      address: string;
+      satNumber: number;
+      inscriptionIds: string[];
+      runeNames: string[];
+    }
+  | { status: 'wrong-offset'; address: string; offset: number; satNumber: number }
+  | { status: 'not-owned'; currentAddress: string; satNumber: number }
+  | { status: 'not-found'; reason: string };
+
+/**
+ * Resolve a sat number or inscription ID to its current UTXO via ord, then
+ * verify ownership + offset-0 placement. Single network call per kind — no
+ * enumeration. Works for hoarder addresses where /utxo + /txs walks fail.
+ *
+ * Caller passes the expected owner address (user's taproot). On 'ok' the
+ * resolved UTXO can be used as vin[0] of commit/quick — the inscription /
+ * rune will land on the user's chosen sat.
+ */
+export async function resolveTarget(
+  input: ResolveTargetInput,
+  expectedOwnerAddress: string,
+): Promise<ResolveTargetResult> {
+  try {
+    let satNumber: number;
+    let satpoint: string;
+    let address: string;
+
+    if (input.kind === 'sat') {
+      satNumber = input.satNumber;
+      const sat = await getSat(input.satNumber);
+      satpoint = sat.satpoint;
+      address = sat.address;
+    } else {
+      const insc = await getInscription(input.inscriptionId);
+      satpoint = insc.satpoint;
+      address = insc.address;
+      satNumber = insc.sat;
+    }
+
+    if (address !== expectedOwnerAddress) {
+      return { status: 'not-owned', currentAddress: address, satNumber };
+    }
+
+    // Satpoint format: "<txid>:<vout>:<offset>"
+    const parts = satpoint.split(':');
+    if (parts.length !== 3) {
+      return { status: 'not-found', reason: `Invalid satpoint from ord: ${satpoint}` };
+    }
+    const [txid, voutStr, offsetStr] = parts;
+    const vout = parseInt(voutStr, 10);
+    const offset = parseInt(offsetStr, 10);
+    if (!Number.isFinite(vout) || !Number.isFinite(offset)) {
+      return { status: 'not-found', reason: `Could not parse satpoint: ${satpoint}` };
+    }
+
+    if (offset !== 0) {
+      return { status: 'wrong-offset', address, offset, satNumber };
+    }
+
+    // Fetch the actual UTXO output to get value + label info
+    const output = await getOutput(txid, vout);
+    return {
+      status: 'ok',
+      txid,
+      vout,
+      offset,
+      value: output.value,
+      address,
+      satNumber,
+      inscriptionIds: output.inscriptions ?? [],
+      runeNames: Object.keys(output.runes ?? {}),
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { status: 'not-found', reason: msg };
+  }
+}
+
 /**
  * Re-resolve a parent inscription's current UTXO location at reveal time.
  * The parent may have moved since the commit was made (wallet consolidation,

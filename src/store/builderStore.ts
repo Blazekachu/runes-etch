@@ -11,6 +11,19 @@ import type {
 const RARITY_RANK: Record<SatRarity, number> = {
   common: 0, uncommon: 1, rare: 2, epic: 3, legendary: 4, mythic: 5,
 };
+
+/** Resolved target UTXO from a sat# / inscription ID lookup. Becomes vin[0]. */
+export interface TargetUtxo {
+  txid: string;
+  vout: number;
+  value: number;
+  /** The sat# user targeted (must be at offset 0 of this UTXO for the etch to land on it). */
+  satNumber: number;
+  /** Inscription IDs already on this UTXO (empty for plain target). Presence → auto reinscription. */
+  inscriptionIds: string[];
+  /** Rune names on this UTXO. Empty for plain. Non-empty + no inscriptions → user is stacking on a rune UTXO (allowed; new rune lands on the same UTXO). */
+  runeNames: string[];
+}
 import { minimumAtHeight, runeNameToU128 } from '@/lib/runes/names';
 
 /** Max age of a persisted wallet connection before it's discarded on page load. */
@@ -159,6 +172,20 @@ interface BuilderStore {
    */
   reinscribeMode: boolean;
   setReinscribeMode: (on: boolean) => void;
+
+  // --- Target sat / inscription (manual entry, sidesteps taproot enumeration) ---
+  // For users with hoarder taproot addresses where /utxo + /txs walk fail or are
+  // unbearably slow, this lets them name a specific sat# or inscription ID. The
+  // builder verifies via a single ord lookup (no enumeration) and uses the resolved
+  // UTXO as vin[0]. When verified, it overrides any picker-selected primary.
+  targetInput: string;
+  setTargetInput: (v: string) => void;
+  targetUtxo: TargetUtxo | null;
+  setTargetUtxo: (u: TargetUtxo | null) => void;
+  targetVerifyState: 'idle' | 'verifying' | 'ok' | 'error';
+  setTargetVerifyState: (s: 'idle' | 'verifying' | 'ok' | 'error') => void;
+  targetVerifyError: string;
+  setTargetVerifyError: (e: string) => void;
   /**
    * Cached rarity info per UTXO (key = `txid:vout`). Populated async after UTXO list loads
    * (mainnet only). UTXOs not in the map are either still loading or ord didn't return data
@@ -411,6 +438,21 @@ export const useBuilderStore = create<BuilderStore>()(
         }),
       })),
 
+      targetInput: '',
+      setTargetInput: (v) => set({ targetInput: v }),
+      targetUtxo: null,
+      setTargetUtxo: (u) => set((state) => ({
+        targetUtxo: u,
+        // Auto-enable reinscribeMode when target carries an inscription. The build
+        // path is identical (target becomes vin[0]) but this flag lets the runestone
+        // builder / UI know the new etch is stacking on existing inscription data.
+        reinscribeMode: u ? u.inscriptionIds.length > 0 : state.reinscribeMode,
+      })),
+      targetVerifyState: 'idle',
+      setTargetVerifyState: (s) => set({ targetVerifyState: s }),
+      targetVerifyError: '',
+      setTargetVerifyError: (e) => set({ targetVerifyError: e }),
+
       feeRates: null,
       setFeeRates: (rates) => set({ feeRates: rates }),
       selectedFeeRate: 10,
@@ -532,6 +574,10 @@ export const useBuilderStore = create<BuilderStore>()(
         primaryUtxoId: null,
         utxoSatInfo: {},
         reinscribeMode: false,
+        targetInput: '',
+        targetUtxo: null,
+        targetVerifyState: 'idle' as const,
+        targetVerifyError: '',
         feeRates: null,
         selectedFeeRate: 10,
         selectedRevealFeeRate: null,
@@ -582,6 +628,10 @@ export const useBuilderStore = create<BuilderStore>()(
         pendingParentId: state.pendingParentId,
         primaryUtxoId: state.primaryUtxoId,
         reinscribeMode: state.reinscribeMode,
+        targetInput: state.targetInput,
+        targetUtxo: state.targetUtxo,
+        targetVerifyState: state.targetVerifyState,
+        targetVerifyError: state.targetVerifyError,
         commitState: state.commitState ? { txid: state.commitState.txid, rawHex: '', confirmations: state.commitState.confirmations, commitOutputIndex: state.commitState.commitOutputIndex, commitOutputValue: state.commitState.commitOutputValue, changeAddress: state.commitState.changeAddress } : null,
         vanityConfig: state.vanityConfig,
         vanityLocktime: state.vanityLocktime,
