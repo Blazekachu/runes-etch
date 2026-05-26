@@ -450,6 +450,10 @@ export default function UtxoSection() {
             {Array.from({ length: 4 }).map((_, i) => (
               <div key={i} className="h-14 rounded-lg bg-gray-900 animate-pulse" />
             ))}
+            <p className="text-xs text-gray-500 mt-1">
+              Loading UTXOs… on addresses with hundreds of UTXOs the indexer falls
+              back to walking transaction history — this can take 30–60 seconds.
+            </p>
           </div>
         )}
 

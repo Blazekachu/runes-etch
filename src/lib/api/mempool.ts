@@ -85,6 +85,10 @@ export async function fetchFeeRates(): Promise<FeeRates> {
 export async function fetchUtxos(address: string): Promise<Utxo[]> {
   validateAddress(address);
   const res = await fetchWithTimeout(`${MEMPOOL_BASE}/address/${encodeURIComponent(address)}/utxo`);
+  // mempool.space (esplora) /utxo returns 400 on addresses with too many UTXOs
+  // (undocumented cap, ~500). Fall back to walking /txs and deriving UTXOs
+  // client-side. Other failures propagate normally.
+  if (res.status === 400) return fetchUtxosByTxWalk(address);
   if (!res.ok) throw new Error(`Failed to fetch UTXOs: ${res.status}`);
   const data = await res.json();
   if (!Array.isArray(data)) throw new Error('Invalid UTXO response: expected array');
@@ -94,6 +98,96 @@ export async function fetchUtxos(address: string): Promise<Utxo[]> {
     if (typeof u.value !== 'number' || !Number.isFinite(u.value) || u.value < 0) throw new Error(`Invalid UTXO value: ${u.value}`);
   }
   return data;
+}
+
+/**
+ * Esplora TX shape (subset we use). Both mempool.space and blockstream return
+ * the same structure here.
+ */
+interface EsploraTx {
+  txid: string;
+  status: { confirmed: boolean; block_height?: number };
+  vin: Array<{ txid: string; vout: number; prevout?: { scriptpubkey_address?: string } }>;
+  vout: Array<{ scriptpubkey_address?: string; value: number }>;
+}
+
+/**
+ * Page through /txs/chain (25 per page) + /txs/mempool, then derive UTXOs
+ * client-side: collect all vouts paying `address`, then remove those whose
+ * outpoints appear as vins in any of those same txs.
+ *
+ * Slow for big addresses (one HTTP request per 25 confirmed txs) but it's
+ * the only resilient path for hoarder addresses where /utxo 400s. Each
+ * page gets a longer timeout + one retry — mempool.space's electrs can
+ * take >15s under load and the default fetch timeout would abort otherwise.
+ * Caller sees the loading spinner the whole time.
+ */
+const WALK_TIMEOUT_MS = 45_000;
+
+async function walkFetch(url: string): Promise<Response> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), WALK_TIMEOUT_MS);
+      const res = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+      return res;
+    } catch (err) {
+      if (attempt === 1) throw err;
+    }
+  }
+  throw new Error('unreachable');
+}
+
+async function fetchUtxosByTxWalk(address: string): Promise<Utxo[]> {
+  const txs: EsploraTx[] = [];
+
+  // Confirmed txs, paginated by last-seen txid.
+  let lastSeen: string | undefined;
+  for (let page = 0; page < 400; page++) {  // hard cap: 400 pages = 10,000 txs
+    const url = lastSeen
+      ? `${MEMPOOL_BASE}/address/${encodeURIComponent(address)}/txs/chain/${lastSeen}`
+      : `${MEMPOOL_BASE}/address/${encodeURIComponent(address)}/txs/chain`;
+    const res = await walkFetch(url);
+    if (!res.ok) throw new Error(`Failed to walk address txs: ${res.status}`);
+    const batch: EsploraTx[] = await res.json();
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    txs.push(...batch);
+    if (batch.length < 25) break;  // final page
+    lastSeen = batch[batch.length - 1].txid;
+  }
+
+  // Unconfirmed txs (single non-paginated batch, up to 50).
+  try {
+    const memRes = await walkFetch(`${MEMPOOL_BASE}/address/${encodeURIComponent(address)}/txs/mempool`);
+    if (memRes.ok) {
+      const memBatch: EsploraTx[] = await memRes.json();
+      if (Array.isArray(memBatch)) txs.push(...memBatch);
+    }
+  } catch { /* unconfirmed pool is best-effort */ }
+
+  // Derive UTXOs: outputs paying `address`, minus those spent by any vin we saw.
+  const utxos = new Map<string, Utxo>();
+  for (const tx of txs) {
+    for (let i = 0; i < tx.vout.length; i++) {
+      const o = tx.vout[i];
+      if (o.scriptpubkey_address === address && Number.isFinite(o.value) && o.value >= 0) {
+        utxos.set(`${tx.txid}:${i}`, {
+          txid: tx.txid,
+          vout: i,
+          value: o.value,
+          status: tx.status,
+        });
+      }
+    }
+  }
+  for (const tx of txs) {
+    for (const v of tx.vin) {
+      if (v.prevout?.scriptpubkey_address === address) {
+        utxos.delete(`${v.txid}:${v.vout}`);
+      }
+    }
+  }
+  return Array.from(utxos.values());
 }
 
 export async function broadcastTx(txHex: string): Promise<string> {
