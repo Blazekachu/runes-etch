@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { fetchUtxos, setMempoolNetwork } from '@/lib/api/mempool';
 import { fetchUtxoSatInfo, isOrdinalsTestnet, setOrdinalsTestnet } from '@/lib/api/ordinals';
+import { estimateQuickEtchVBytes } from '@/lib/runes/quickEtch';
 import type { LabeledUtxo, SatRarity } from '@/types';
 import SectionWrapper from './SectionWrapper';
 
@@ -84,8 +85,17 @@ export default function UtxoSection() {
   // selectedRevealFeeRate (the reveal budget) so the user pre-funds reveal at
   // up to that rate. When null, builder falls back to commit rate.
   const effectiveRevealRate = selectedRevealFeeRate ?? selectedFeeRate;
+  // Preview-time worst-case for quick mode: 1 p2wpkh input (fee inputs come from
+  // payment), p2tr dust receiver, OP_RETURN runestone (~30 B typical), p2wpkh
+  // change. Matches the per-type estimator in quickEtch.ts so the preview value
+  // is consistent with the fee the user actually pays.
   const estCost = isQuick
-    ? Math.ceil((10.5 + 68 + 3 * 43 + 50) * selectedFeeRate) + 546 // quick: fee + dust for premine
+    ? Math.ceil(
+        estimateQuickEtchVBytes(
+          [{ type: 'p2wpkh' }],
+          [{ type: 'p2tr' }, { type: 'op_return', scriptByteLen: 30 }, { type: 'p2wpkh' }],
+        ) * selectedFeeRate,
+      ) + 546
     : estimateCost(
         selectedFeeRate,
         effectiveRevealRate,

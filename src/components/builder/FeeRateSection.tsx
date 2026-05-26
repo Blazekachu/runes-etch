@@ -2,10 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
-import { fetchFeeRates } from '@/lib/api/mempool';
+import { fetchFeeRates, setMempoolNetwork } from '@/lib/api/mempool';
+import { resolveFeeFromMode, type FeeMode } from '@/lib/fees/resolveFeeFromMode';
 import SectionWrapper from './SectionWrapper';
-
-type FeeMode = 'economy' | 'normal' | 'fast' | 'custom';
 
 export default function FeeRateSection() {
   const feeRates = useBuilderStore((s) => s.feeRates);
@@ -15,6 +14,7 @@ export default function FeeRateSection() {
   const selectedRevealFeeRate = useBuilderStore((s) => s.selectedRevealFeeRate);
   const setSelectedRevealFeeRate = useBuilderStore((s) => s.setSelectedRevealFeeRate);
   const detectedMode = useBuilderStore((s) => s.detectedMode);
+  const wallet = useBuilderStore((s) => s.wallet);
 
   const [commitCustom, setCommitCustom] = useState('');
   const [commitMode, setCommitMode] = useState<FeeMode>('normal');
@@ -24,39 +24,33 @@ export default function FeeRateSection() {
   const [loadingFees, setLoadingFees] = useState(false);
   const [feeError, setFeeError] = useState<string | null>(null);
 
-  const MIN_FEE_RATE = 1;
-  const MAX_FEE_RATE = 2000;
   const isQuick = detectedMode === 'quick';
 
+  // Defer fee fetch until wallet is connected — otherwise the module-level
+  // MEMPOOL_BASE in mempool.ts is still mainnet (the default) and we'd fetch
+  // mainnet rates while the UI is operating on a testnet wallet. Re-arm
+  // setMempoolNetwork on every address change to handle network switches.
   useEffect(() => {
-    loadFees();
+    if (!wallet.connected || !wallet.taprootAddress) return;
+    (async () => {
+      await setMempoolNetwork(wallet.taprootAddress);
+      loadFees();
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [wallet.connected, wallet.taprootAddress]);
 
-  // Sync commit rate
+  // Sync commit rate. Custom input survives even when feeRates is null.
   useEffect(() => {
-    if (!feeRates) return;
-    if (commitMode === 'economy') setSelectedFeeRate(feeRates.economyFee);
-    else if (commitMode === 'normal') setSelectedFeeRate(feeRates.halfHourFee);
-    else if (commitMode === 'fast') setSelectedFeeRate(feeRates.fastestFee);
-    else if (commitMode === 'custom') {
-      const v = parseInt(commitCustom, 10);
-      if (!isNaN(v) && v > 0) setSelectedFeeRate(Math.min(Math.max(v, MIN_FEE_RATE), MAX_FEE_RATE));
-    }
+    const res = resolveFeeFromMode(commitMode, feeRates, commitCustom);
+    if (res.kind === 'set') setSelectedFeeRate(res.value);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [commitMode, feeRates, commitCustom]);
 
-  // Sync reveal budget. 'match' keeps it null → commit.ts falls back to commitFeeRate.
+  // Sync reveal budget. 'match' clears budget so commit.ts falls back to commitFeeRate.
   useEffect(() => {
-    if (revealMode === 'match') { setSelectedRevealFeeRate(null); return; }
-    if (!feeRates) return;
-    if (revealMode === 'economy') setSelectedRevealFeeRate(feeRates.economyFee);
-    else if (revealMode === 'normal') setSelectedRevealFeeRate(feeRates.halfHourFee);
-    else if (revealMode === 'fast') setSelectedRevealFeeRate(feeRates.fastestFee);
-    else if (revealMode === 'custom') {
-      const v = parseInt(revealCustom, 10);
-      if (!isNaN(v) && v > 0) setSelectedRevealFeeRate(Math.min(Math.max(v, MIN_FEE_RATE), MAX_FEE_RATE));
-    }
+    const res = resolveFeeFromMode(revealMode, feeRates, revealCustom);
+    if (res.kind === 'set') setSelectedRevealFeeRate(res.value);
+    else if (res.kind === 'match') setSelectedRevealFeeRate(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealMode, feeRates, revealCustom]);
 
@@ -110,6 +104,18 @@ export default function FeeRateSection() {
         {feeError && (
           <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs text-red-400">
             {feeError}
+          </div>
+        )}
+
+        {!wallet.connected && (
+          <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-xs text-yellow-400">
+            Connect a wallet to fetch current fee rates. Custom input still works.
+          </div>
+        )}
+
+        {wallet.connected && !feeRates && !feeError && !loadingFees && (
+          <div className="rounded-lg border border-gray-700 bg-gray-900 px-4 py-3 text-xs text-gray-400">
+            Waiting for fee rates… presets disabled until they load. Custom input still works.
           </div>
         )}
 

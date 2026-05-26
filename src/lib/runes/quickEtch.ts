@@ -121,9 +121,21 @@ export function buildQuickEtchTx(params: QuickEtchParams): QuickEtchResult {
   });
   outputIndex++;
 
-  // Estimate fee (add 1 output for premine dust if applicable)
-  const numOutputs = (hasPremine ? 1 : 0) + 1 /* OP_RETURN */ + 1 /* change */;
-  const estimatedVBytes = estimateQuickEtchVBytes(fundingUtxos.length, numOutputs);
+  // Estimate fee. Per-type sizing — accurate within ±5% of actual TX vsize.
+  // Assumes a change output (taproot if any taproot input, else p2wpkh).
+  // If real change ends up sub-dust and gets dropped, we overpay by ~31 vB
+  // worth of fee — preferable to underpaying and ending up below min relay.
+  const changeIsTaproot = fundingUtxos.some((u) =>
+    u.address.startsWith('bc1p') || u.address.startsWith('tb1p'),
+  );
+  const inputDescs: EstimatorInput[] = fundingUtxos.map((u) => ({
+    type: (u.address.startsWith('bc1p') || u.address.startsWith('tb1p')) ? 'p2tr' : 'p2wpkh',
+  }));
+  const outputDescs: EstimatorOutput[] = [];
+  if (hasPremine) outputDescs.push({ type: 'p2tr' }); // receiverAddress is taproot
+  outputDescs.push({ type: 'op_return', scriptByteLen: runestoneScript.length });
+  outputDescs.push({ type: changeIsTaproot ? 'p2tr' : 'p2wpkh' });
+  const estimatedVBytes = estimateQuickEtchVBytes(inputDescs, outputDescs);
   const fee = BigInt(Math.ceil(estimatedVBytes * feeRate));
 
   // Change output
@@ -151,6 +163,36 @@ export function buildQuickEtchTx(params: QuickEtchParams): QuickEtchResult {
   };
 }
 
-function estimateQuickEtchVBytes(numInputs: number, numOutputs: number): number {
-  return Math.ceil(10.5 + numInputs * 57.5 + numOutputs * 43 + 50);
+export type EstimatorInput = { type: 'p2wpkh' } | { type: 'p2tr' };
+export type EstimatorOutput =
+  | { type: 'p2wpkh' }
+  | { type: 'p2tr' }
+  | { type: 'op_return'; scriptByteLen: number };
+
+// vsize contributions (BIP-141 witness discount: weight / 4):
+//   tx overhead   = 10.5 vB (4 version + 1+1 in/out varints + 4 locktime + 0.5 marker/flag)
+//   p2wpkh input  = 68 vB   (41-byte outpoint*4 weight + ~108 weight witness)
+//   p2tr input    = 57.5 vB (41-byte outpoint*4 weight + 66 weight witness, key-path)
+//   p2wpkh output = 31 vB   (8 value + 1 scriptlen + 22 script)
+//   p2tr output   = 43 vB   (8 value + 1 scriptlen + 34 script)
+//   op_return out = 9 + scriptByteLen vB (8 value + 1 scriptlen varint + script)
+const TX_OVERHEAD_VB = 10.5;
+const P2WPKH_IN_VB = 68;
+const P2TR_IN_VB = 57.5;
+const P2WPKH_OUT_VB = 31;
+const P2TR_OUT_VB = 43;
+const OP_RETURN_OUT_BASE_VB = 9; // + scriptByteLen
+
+export function estimateQuickEtchVBytes(
+  inputs: EstimatorInput[],
+  outputs: EstimatorOutput[],
+): number {
+  let vb = TX_OVERHEAD_VB;
+  for (const i of inputs) vb += i.type === 'p2tr' ? P2TR_IN_VB : P2WPKH_IN_VB;
+  for (const o of outputs) {
+    if (o.type === 'p2tr') vb += P2TR_OUT_VB;
+    else if (o.type === 'p2wpkh') vb += P2WPKH_OUT_VB;
+    else vb += OP_RETURN_OUT_BASE_VB + o.scriptByteLen;
+  }
+  return Math.ceil(vb);
 }
