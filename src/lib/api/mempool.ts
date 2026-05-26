@@ -45,11 +45,27 @@ export async function setMempoolNetwork(address: string): Promise<void> {
 
 const FETCH_TIMEOUT_MS = 15000;
 
-// L7: All fetches use a timeout to prevent hanging on unresponsive APIs
-function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+// L7: All fetches use a timeout to prevent hanging on unresponsive APIs.
+// The abort reason is non-empty so AbortError surfaces as a human-meaningful
+// message instead of "signal is aborted without reason".
+function fetchWithTimeout(url: string, init?: RequestInit, timeoutMs = FETCH_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(
+    () => controller.abort(new Error(`Request timed out after ${timeoutMs}ms: ${url}`)),
+    timeoutMs,
+  );
   return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
+/** Retry a function once if it throws an AbortError (likely a timeout under mempool load). */
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    const isAbort = err instanceof Error && (err.name === 'AbortError' || /aborted|timed out/i.test(err.message));
+    if (!isAbort) throw err;
+    return await fn();
+  }
 }
 
 const TXID_RE = /^[0-9a-f]{64}$/i;
@@ -65,7 +81,12 @@ function validateAddress(address: string): void {
 }
 
 export async function fetchFeeRates(): Promise<FeeRates> {
-  const res = await fetchWithTimeout(`${MEMPOOL_BASE}/v1/fees/recommended`);
+  // 30s + 1 retry: fee endpoint is tiny but mempool.space queues under heavy
+  // concurrent load (e.g. while a parallel /utxo or /txs walk is hammering it),
+  // and the default 15s would abort under those conditions.
+  const res = await withRetry(() =>
+    fetchWithTimeout(`${MEMPOOL_BASE}/v1/fees/recommended`, undefined, 30_000)
+  );
   if (!res.ok) throw new Error(`Failed to fetch fee rates: ${res.status}`);
   const data = await res.json();
   // M1: Validate fee rate response — don't trust blindly
@@ -127,10 +148,7 @@ const WALK_TIMEOUT_MS = 45_000;
 async function walkFetch(url: string): Promise<Response> {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), WALK_TIMEOUT_MS);
-      const res = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
-      return res;
+      return await fetchWithTimeout(url, undefined, WALK_TIMEOUT_MS);
     } catch (err) {
       if (attempt === 1) throw err;
     }

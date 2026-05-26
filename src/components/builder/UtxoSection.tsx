@@ -133,12 +133,15 @@ export default function UtxoSection() {
       // Critical when wallet was rehydrated from persist (handleConnect never ran).
       await setMempoolNetwork(wallet.taprootAddress);
       setOrdinalsTestnet(wallet.taprootAddress);
-      const [taprootRaw, paymentRaw] = await Promise.all([
-        fetchUtxos(wallet.taprootAddress),
+      // Serial, not parallel: when one address has many UTXOs, /utxo 400s and
+      // falls back to walking /txs (40+ requests). Doing both addresses in
+      // parallel doubles the concurrent load on mempool.space and triggers
+      // rate-limit / timeout cascades. Sequential keeps the indexer happy.
+      const taprootRaw = await fetchUtxos(wallet.taprootAddress);
+      const paymentRaw =
         wallet.paymentAddress && wallet.paymentAddress !== wallet.taprootAddress
-          ? fetchUtxos(wallet.paymentAddress)
-          : Promise.resolve([]),
-      ]);
+          ? await fetchUtxos(wallet.paymentAddress)
+          : [];
 
       const seen = new Set<string>();
       const allRaw = [];
@@ -182,7 +185,11 @@ export default function UtxoSection() {
         setError('Could not label taproot UTXOs (ordinals API unavailable). All shown as plain — be careful not to spend inscriptions or runes.');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load UTXOs');
+      const raw = err instanceof Error ? err.message : String(err);
+      const friendly = /aborted|timed out/i.test(raw)
+        ? 'mempool.space timed out while loading UTXOs. This is usually transient under heavy load — try Refresh.'
+        : raw || 'Failed to load UTXOs';
+      setError(friendly);
     } finally {
       setLoading(false);
     }
