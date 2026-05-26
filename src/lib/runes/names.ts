@@ -181,6 +181,13 @@ export function validateRuneName(
   // Testnet block heights are below runes activation — all names are available
   if (isTestnet) return { valid: true };
 
+  // Without a real chain tip we can't decide what's etchable — minimumAtHeight(0)
+  // would return the pre-activation minimum ("AAAAAAAAAAAAA") and produce a
+  // misleading "must be 13 letters" message. Tell the caller to wait/retry.
+  if (!currentBlockHeight || currentBlockHeight < 840000) {
+    return { valid: false, error: 'Loading current block height — try again in a moment.' };
+  }
+
   const nameValue = runeNameToU128(name);
   const minValue = minimumAtHeight(currentBlockHeight);
 

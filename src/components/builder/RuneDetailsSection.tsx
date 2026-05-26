@@ -36,24 +36,44 @@ export default function RuneDetailsSection() {
   });
 
   const [blockHeight, setBlockHeight] = useState<number>(0);
+  const [heightError, setHeightError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [availability, setAvailability] = useState<'available' | 'taken' | 'error' | null>(null);
   const [availabilityMsg, setAvailabilityMsg] = useState('');
   const [nameError, setNameError] = useState('');
 
-  // Fetch block height on mount
+  // Fetch block height on mount AND whenever the wallet network changes — mainnet
+  // and testnet have very different tips, so a network switch in-session would
+  // otherwise apply a stale height to validation.
+  async function loadBlockHeight() {
+    setHeightError(null);
+    try {
+      const h = await getCurrentBlockHeight();
+      setBlockHeight(h);
+      setCurrentBlockHeight(h);
+    } catch (err) {
+      // Surface failure instead of swallowing — left as 0 silently produced
+      // misleading "minimum is 13 letters" errors in validateRuneName.
+      setHeightError(err instanceof Error ? err.message : 'Failed to fetch chain tip');
+    }
+  }
   useEffect(() => {
     let cancelled = false;
-    getCurrentBlockHeight()
-      .then((h) => {
-        if (!cancelled) {
-          setBlockHeight(h);
-          setCurrentBlockHeight(h);
-        }
-      })
-      .catch(() => {});
+    (async () => { if (!cancelled) await loadBlockHeight(); })();
     return () => { cancelled = true; };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wallet.taprootAddress]);
+
+  // Re-validate the rune name when the block height arrives or changes.
+  // Without this, the keystroke-time validation persists with a stale
+  // (often zero) height and the user sees a misleading "loading" error
+  // even after the fetch completes.
+  useEffect(() => {
+    if (!runeName) { setNameError(''); return; }
+    const v = validateRuneName(runeName, blockHeight, isTestnet);
+    setNameError(v.valid ? '' : v.error);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blockHeight, isTestnet]);
 
   // Sync local input state FROM store when store changes externally (bundle load, reset).
   // Without these, useState's initial-value-only behavior would leave inputs at defaults
@@ -176,6 +196,12 @@ export default function RuneDetailsSection() {
           {availability === 'available' && <p className="text-xs text-green-400">{availabilityMsg}</p>}
           {availability === 'taken' && <p className="text-xs text-red-400">{availabilityMsg}</p>}
           {availability === 'error' && <p className="text-xs text-yellow-400">{availabilityMsg}</p>}
+          {heightError && (
+            <p className="text-xs text-yellow-400">
+              Couldn&apos;t fetch chain tip ({heightError}).{' '}
+              <button onClick={loadBlockHeight} className="underline hover:text-yellow-300">Retry</button>
+            </p>
+          )}
         </div>
 
         {/* Interactive spacer placement */}
