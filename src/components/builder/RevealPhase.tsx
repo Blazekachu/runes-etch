@@ -264,7 +264,10 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
         additionalFundingUtxos: [],
         feeRate: selectedFeeRate,
         receiverAddress: wallet.taprootAddress,
-        changeAddress: commitState.changeAddress || wallet.taprootAddress,
+        // #12: prefer payment (segwit) over taproot for change. The old
+        // `commitState.changeAddress || wallet.taprootAddress` chain skipped
+        // segwit entirely when commitState.changeAddress was blank (bundle resume).
+        changeAddress: commitState.changeAddress || wallet.paymentAddress || wallet.taprootAddress,
         vanityNonce: new Uint8Array(0),
         locktime: vanityLocktime ?? 0,
         network: bitcoinNetworkForAddress(wallet.taprootAddress),

@@ -561,7 +561,11 @@ export const useBuilderStore = create<BuilderStore>()(
             confirmations: 0,
             commitOutputIndex: bundle.commitOutputIndex,
             commitOutputValue: bundle.commitOutputValue,
-            changeAddress: '',
+            // #12: bundles don't carry changeAddress (session-specific). Seed with
+            // the current wallet's payment address so the reveal's surplus returns
+            // to segwit, not silently to taproot via the empty-string fallback that
+            // burned the WHITEFIELD reveal's 15,638-sat change in the wrong place.
+            changeAddress: get().wallet.paymentAddress || get().wallet.taprootAddress || '',
           },
           inscriptionFile,
           delegateInscriptionId: bundle.delegateInscriptionId ?? null,

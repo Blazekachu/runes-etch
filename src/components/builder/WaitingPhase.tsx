@@ -169,7 +169,8 @@ export default function WaitingPhase() {
           additionalFundingUtxos: [],
           feeRate: selectedFeeRate,
           receiverAddress: wallet.taprootAddress,
-          changeAddress: commitState?.changeAddress || wallet.taprootAddress,
+          // #12: payment (segwit) over taproot for reveal change.
+          changeAddress: commitState?.changeAddress || wallet.paymentAddress || wallet.taprootAddress,
           vanityNonce: new Uint8Array(0),
           network: btcNetwork,
         });
