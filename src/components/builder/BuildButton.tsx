@@ -8,7 +8,7 @@ import { buildQuickEtchTx } from '@/lib/runes/quickEtch';
 import { serializeForTxid } from '@/lib/runes/reveal';
 import { signPsbt } from '@/lib/wallet/xverse';
 import { broadcastTx, bitcoinNetworkForAddress, getCurrentBlockHeight } from '@/lib/api/mempool';
-import { checkRuneNameAvailable } from '@/lib/api/ordinals';
+import { getRuneNameStatus } from '@/lib/api/ordinals';
 import { VanityGrinder } from '@/lib/vanity/grinder';
 
 export default function BuildButton() {
@@ -371,11 +371,18 @@ export default function BuildButton() {
     setError(null);
 
     try {
-      // C1: Re-check name availability right before broadcast
-      const nameAvailable = await checkRuneNameAvailable(etching.runeName);
-      if (!nameAvailable) {
+      // C1: Re-check name availability right before broadcast. #10 — distinguish
+      // 'taken' from 'unknown'-due-to-lag so we never falsely report taken when
+      // the truth is uncertain, and never silently broadcast on a stale 404.
+      const nameStatus = await getRuneNameStatus(etching.runeName);
+      if (nameStatus.state === 'taken') {
         throw new Error(
           `Rune name "${etching.runeName}" has been taken. Do not broadcast.`
+        );
+      }
+      if (nameStatus.state === 'unknown') {
+        throw new Error(
+          `Indexer is ${nameStatus.behind} blocks behind chain tip (ord at ${nameStatus.indexerHeight}, tip at ${nameStatus.chainHeight}). Cannot confirm "${etching.runeName}" is still unused — wait for the indexer to catch up before broadcasting.`
         );
       }
 

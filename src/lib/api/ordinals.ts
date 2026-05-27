@@ -1,5 +1,5 @@
 import type { OrdRuneResponse, OrdInscriptionResponse, OrdOutputResponse, OrdSatResponse, ParentInscription, UtxoSatInfo } from '@/types';
-import { mempoolBaseForAddress } from './mempool';
+import { mempoolBaseForAddress, getCurrentBlockHeight } from './mempool';
 
 const PUBLIC_ORD_DEFAULT = 'https://ordinals.com';
 
@@ -53,19 +53,88 @@ const RUNE_NAME_RE = /^[A-Z]+$/;
 const INSCRIPTION_ID_RE = /^[0-9a-f]{64}i\d+$/i;
 const TXID_RE = /^[0-9a-f]{64}$/i;
 
-export async function checkRuneNameAvailable(name: string): Promise<boolean> {
+/**
+ * Truth-telling rune name lookup result.
+ *
+ * `'unknown'` means ord 404'd but the indexer is too far behind chain tip to
+ * trust that 404 — a name etched in a recent un-indexed block would look
+ * identical to a never-etched name. Callers should refuse to broadcast on
+ * `'unknown'` (fail-safe) or surface the lag context to the user.
+ */
+export type RuneNameStatus =
+  | { state: 'available' }
+  | { state: 'taken'; rune: OrdRuneResponse }
+  | { state: 'unknown'; reason: 'indexer-lagging'; indexerHeight: number; chainHeight: number; behind: number };
+
+/** ord must be within this many blocks of chain tip for a 404 to mean "name is free". */
+const NAME_CHECK_LAG_THRESHOLD = 3;
+
+/**
+ * Look up a rune name's on-chain status with indexer-freshness awareness.
+ *
+ * Without the freshness cross-check, ord 404s indistinguishably for two cases:
+ *  (a) name never etched (truly available)
+ *  (b) name etched in a block ord hasn't indexed yet (NOT available)
+ *
+ * Case (b) would silently walk the user into broadcasting a cenotaph at full
+ * fees on a duplicate name. We detect it by comparing ord's `/status.height`
+ * against mempool's chain tip; if ord is more than `NAME_CHECK_LAG_THRESHOLD`
+ * blocks behind, we return `'unknown'` with the lag numbers so the UI can
+ * surface them. Otherwise the 404 is trustworthy and we return `'available'`.
+ *
+ * When the freshness measurement itself fails (mempool unreachable, ord status
+ * 5xx), we fall back to the pre-#10 optimistic behavior of trusting the 404 —
+ * not worse than what we shipped before.
+ */
+export async function getRuneNameStatus(name: string): Promise<RuneNameStatus> {
   if (!RUNE_NAME_RE.test(name)) throw new Error(`Invalid rune name: ${name}`);
   // Skip only when on testnet AND no custom testnet indexer is configured.
   // Public ordinals.com is mainnet-only — querying it for a testnet name
   // returns mainnet data, which is meaningless. With a local testnet ord
   // configured via NEXT_PUBLIC_ORD_BASE_TESTNET, the check is meaningful.
-  if (_isTestnet && isPublicOrdForCurrentNetwork()) return true;
-  const res = await fetchWithTimeout(`${ordBase()}/rune/${encodeURIComponent(name)}`, {
-    headers: { Accept: 'application/json' },
-  });
-  if (res.status === 404) return true;
-  if (!res.ok) throw new Error(`Ord API error: ${res.status}`);
-  return false;
+  if (_isTestnet && isPublicOrdForCurrentNetwork()) return { state: 'available' };
+
+  const [runeRes, ordStatusRes, chainHeight] = await Promise.all([
+    fetchWithTimeout(`${ordBase()}/rune/${encodeURIComponent(name)}`, {
+      headers: { Accept: 'application/json' },
+    }),
+    fetchWithTimeout(`${ordBase()}/status`, {
+      headers: { Accept: 'application/json' },
+    }).catch(() => null),
+    getCurrentBlockHeight().catch(() => -1),
+  ]);
+
+  if (runeRes.ok) {
+    const rune = (await runeRes.json()) as OrdRuneResponse;
+    return { state: 'taken', rune };
+  }
+  if (runeRes.status !== 404) {
+    throw new Error(`Ord API error on /rune/${encodeURIComponent(name)}: ${runeRes.status}`);
+  }
+
+  // 404. Decide whether to trust it by measuring lag.
+  if (!ordStatusRes || !ordStatusRes.ok || chainHeight < 0) {
+    // Can't measure — fall back to pre-#10 optimistic behavior.
+    return { state: 'available' };
+  }
+  const ordStatus = (await ordStatusRes.json()) as { height: number };
+  const indexerHeight = ordStatus.height;
+  const behind = Math.max(0, chainHeight - indexerHeight);
+  if (behind > NAME_CHECK_LAG_THRESHOLD) {
+    return { state: 'unknown', reason: 'indexer-lagging', indexerHeight, chainHeight, behind };
+  }
+  return { state: 'available' };
+}
+
+/**
+ * Backwards-compat wrapper. Returns `true` only when state is `'available'` —
+ * `'unknown'` is treated as not-available (fail-safe: when in doubt, refuse to
+ * broadcast). Existing callers gain lag protection automatically. For richer
+ * UX that distinguishes the `'unknown'` state, call `getRuneNameStatus` directly.
+ */
+export async function checkRuneNameAvailable(name: string): Promise<boolean> {
+  const status = await getRuneNameStatus(name);
+  return status.state === 'available';
 }
 
 export async function getInscription(

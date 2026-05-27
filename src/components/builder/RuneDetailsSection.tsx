@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { validateRuneName, spacerBitmask } from '@/lib/runes/names';
-import { checkRuneNameAvailable } from '@/lib/api/ordinals';
+import { getRuneNameStatus } from '@/lib/api/ordinals';
 import { getCurrentBlockHeight } from '@/lib/api/mempool';
 import SectionWrapper from './SectionWrapper';
 
@@ -38,7 +38,7 @@ export default function RuneDetailsSection() {
   const [blockHeight, setBlockHeight] = useState<number>(0);
   const [heightError, setHeightError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
-  const [availability, setAvailability] = useState<'available' | 'taken' | 'error' | null>(null);
+  const [availability, setAvailability] = useState<'available' | 'taken' | 'unknown' | 'error' | null>(null);
   const [availabilityMsg, setAvailabilityMsg] = useState('');
   const [nameError, setNameError] = useState('');
 
@@ -132,9 +132,19 @@ export default function RuneDetailsSection() {
     setChecking(true);
     setAvailability(null);
     try {
-      const available = await checkRuneNameAvailable(runeName);
-      setAvailability(available ? 'available' : 'taken');
-      setAvailabilityMsg(available ? 'Name is available!' : 'Name is already taken.');
+      const status = await getRuneNameStatus(runeName);
+      if (status.state === 'available') {
+        setAvailability('available');
+        setAvailabilityMsg('Name is available!');
+      } else if (status.state === 'taken') {
+        setAvailability('taken');
+        setAvailabilityMsg('Name is already taken.');
+      } else {
+        setAvailability('unknown');
+        setAvailabilityMsg(
+          `Indexer is ${status.behind} blocks behind chain tip (ord at ${status.indexerHeight}, tip at ${status.chainHeight}). Name appears unused but cannot be confirmed — wait for the indexer to catch up before broadcasting.`
+        );
+      }
     } catch {
       setAvailability('error');
       setAvailabilityMsg('Could not check availability. Try again.');
@@ -195,6 +205,7 @@ export default function RuneDetailsSection() {
           {nameError && <p className="text-xs text-red-400">{nameError}</p>}
           {availability === 'available' && <p className="text-xs text-green-400">{availabilityMsg}</p>}
           {availability === 'taken' && <p className="text-xs text-red-400">{availabilityMsg}</p>}
+          {availability === 'unknown' && <p className="text-xs text-yellow-400">⚠ {availabilityMsg}</p>}
           {availability === 'error' && <p className="text-xs text-yellow-400">{availabilityMsg}</p>}
           {heightError && (
             <p className="text-xs text-yellow-400">

@@ -3,7 +3,7 @@ import type {
   RuneEtching, InscriptionFile, ParentInscription,
 } from '@/types';
 import { fetchUtxos, getCurrentBlockHeight } from '@/lib/api/mempool';
-import { checkRuneNameAvailable, resolveParentForReveal } from '@/lib/api/ordinals';
+import { getRuneNameStatus, resolveParentForReveal } from '@/lib/api/ordinals';
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 
@@ -86,12 +86,22 @@ export async function validateBundle(
       return result;
     }
 
-    // Check name
-    result.nameAvailable = await checkRuneNameAvailable(bundle.runeName);
-    if (!result.nameAvailable) {
+    // Check name. #10 — distinguish 'taken' from 'unknown'-due-to-lag so the
+    // resume flow doesn't claim the name was stolen when the indexer is just
+    // catching up. `nameAvailable` stays a boolean for downstream consumers;
+    // we surface the lag context via `result.error`.
+    const nameStatus = await getRuneNameStatus(bundle.runeName);
+    if (nameStatus.state === 'taken') {
+      result.nameAvailable = false;
       result.error = `Rune name "${bundle.runeName}" has already been etched.`;
       return result;
     }
+    if (nameStatus.state === 'unknown') {
+      result.nameAvailable = false;
+      result.error = `Indexer is ${nameStatus.behind} blocks behind chain tip (ord at ${nameStatus.indexerHeight}, tip at ${nameStatus.chainHeight}) — cannot confirm "${bundle.runeName}" is still unused. Wait for the indexer to catch up before resuming.`;
+      return result;
+    }
+    result.nameAvailable = true;
 
     // Check parent (if any)
     if (bundle.parentInscriptionId) {

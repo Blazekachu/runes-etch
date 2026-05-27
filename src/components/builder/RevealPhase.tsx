@@ -9,7 +9,7 @@ import { buildTapscript, buildBareTapscript } from '@/lib/runes/inscription';
 import { runeNameToCommitmentBytes } from '@/lib/runes/names';
 import { signPsbt, connectWallet, getActiveProvider } from '@/lib/wallet/xverse';
 import { broadcastTx, fetchFeeRates, getTxConfirmations, fetchUtxos, setMempoolNetwork, bitcoinNetworkForAddress } from '@/lib/api/mempool';
-import { checkRuneNameAvailable, setOrdinalsTestnet, resolveParentForReveal } from '@/lib/api/ordinals';
+import { getRuneNameStatus, setOrdinalsTestnet, resolveParentForReveal } from '@/lib/api/ordinals';
 import type { FeeRates } from '@/types';
 
 bitcoin.initEccLib(ecc);
@@ -124,10 +124,15 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
     setError(null);
 
     try {
-      // C1: Re-check name availability before reveal broadcast
-      const nameAvailable = await checkRuneNameAvailable(etching.runeName);
-      if (!nameAvailable) {
+      // C1: Re-check name availability before reveal broadcast. #10 — block on
+      // 'unknown' (indexer lag) with distinct message so user knows to wait
+      // rather than thinking the name was stolen.
+      const nameStatus = await getRuneNameStatus(etching.runeName);
+      if (nameStatus.state === 'taken') {
         throw new Error(`Rune name "${etching.runeName}" has been taken. Broadcasting would produce a cenotaph. Your commit funds can be recovered via the tapscript.`);
+      }
+      if (nameStatus.state === 'unknown') {
+        throw new Error(`Indexer is ${nameStatus.behind} blocks behind chain tip (ord at ${nameStatus.indexerHeight}, tip at ${nameStatus.chainHeight}). Cannot confirm "${etching.runeName}" is still unused — wait for the indexer to catch up before broadcasting the reveal.`);
       }
 
       // H-5: Re-verify commit TX has 6 confirmations before building reveal
