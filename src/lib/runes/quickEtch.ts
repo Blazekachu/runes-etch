@@ -10,7 +10,7 @@
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { buildRunestoneScript } from './runestone';
-import { minimumAtHeight, runeNameToU128 } from './names';
+import { minimumAtHeight, runeNameToU128, u128ToRuneName } from './names';
 import type { RuneEtching } from '@/types';
 import type { FundingUtxo } from './commit';
 
@@ -31,6 +31,13 @@ export interface QuickEtchParams {
   /** nLockTime value for vanity TXID grinding. Safe when all sequences are 0xffffffff. */
   locktime?: number;
   network?: bitcoin.Network;
+  /**
+   * Authoritative chain rune-name minimum (e.g. from ord `/status.minimum_rune_for_next_block`).
+   * When provided, the pre-broadcast guard checks the name against this — chain-agnostic,
+   * works for mainnet + testnet4. Without it, the guard falls back to the mainnet-only
+   * local computation (and is bypassed on testnet, which is how #11 happened on testnet4).
+   */
+  runeMinimum?: bigint | null;
 }
 
 export interface QuickEtchResult {
@@ -52,21 +59,26 @@ export function buildQuickEtchTx(params: QuickEtchParams): QuickEtchResult {
     isTestnet = false,
     locktime = 0,
     network = bitcoin.networks.bitcoin,
+    runeMinimum = null,
   } = params;
 
-  // C2: Quick etch has no commitment. Names that still require commitment
-  // (minimumAtHeight > 0 at current height) would produce a cenotaph.
-  // The name must be fully unlocked — i.e., minimum is 0 (all names open)
-  // OR the name's value is >= the current minimum.
-  // Skip on testnet where block height is below runes activation.
-  if (!isTestnet) {
-    const nameValue = runeNameToU128(etching.runeName);
-    const minValue = minimumAtHeight(currentBlockHeight);
-    if (nameValue < minValue) {
-      throw new Error(
-        `Quick etch requires the name to be fully unlocked. "${etching.runeName}" still requires a commit-reveal. Use Full, No Parent, or No Inscription mode instead.`
-      );
-    }
+  // C2: Quick etch has no commitment. Names below the chain's current minimum
+  // would produce a cenotaph (Finding #11 — burned 247 sats on testnet4 BUDDY
+  // before this guard was authoritative). Precedence: caller-supplied minimum
+  // first (chain-agnostic, e.g. ord /status), else mainnet local computation,
+  // else permissive on testnet (legacy fallback for testnet3 / regtest).
+  const nameValue = runeNameToU128(etching.runeName);
+  let minValue: bigint | null = null;
+  if (runeMinimum !== null) {
+    minValue = runeMinimum;
+  } else if (!isTestnet) {
+    minValue = minimumAtHeight(currentBlockHeight);
+  }
+  if (minValue !== null && nameValue < minValue) {
+    const minName = u128ToRuneName(minValue);
+    throw new Error(
+      `Quick etch requires the name to be fully unlocked. "${etching.runeName}" is below the chain's current minimum "${minName}" (${minName.length} letters). Pick a name ≥ "${minName}", or use Full / No Parent / No Inscription mode (commit-reveal).`
+    );
   }
 
   const psbt = new bitcoin.Psbt({ network });

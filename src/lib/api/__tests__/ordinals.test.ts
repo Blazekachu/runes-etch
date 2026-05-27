@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { getRuneNameStatus, checkRuneNameAvailable, setOrdinalsTestnet } from '../ordinals';
+import { getRuneNameStatus, checkRuneNameAvailable, getRuneMinimumFromOrd, setOrdinalsTestnet } from '../ordinals';
 
 /**
  * Tests for Finding #10 — ord 404 must not silently mean "name is available"
@@ -158,5 +158,53 @@ describe('checkRuneNameAvailable (backwards-compat wrapper)', () => {
       chainTip: { status: 200, body: '850000' },
     });
     expect(await checkRuneNameAvailable('NEVERETCHED')).toBe(false);
+  });
+});
+
+describe('getRuneMinimumFromOrd (Finding #11)', () => {
+  beforeEach(() => {
+    setOrdinalsTestnet('bc1qxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx');
+  });
+
+  function installStatusMock(minName: string | undefined, status = 200) {
+    global.fetch = vi.fn(async (url: string | URL) => {
+      const u = url.toString();
+      if (u.endsWith('/status')) {
+        return new Response(JSON.stringify({ minimum_rune_for_next_block: minName }), { status });
+      }
+      throw new Error(`Unmocked fetch: ${u}`);
+    }) as unknown as typeof fetch;
+  }
+
+  it('returns the u128 value of ord-reported minimum name', async () => {
+    installStatusMock('FBQUW'); // testnet4 observed minimum in BUDDY incident
+    const min = await getRuneMinimumFromOrd();
+    // F=6,B=2,Q=17,U=21,W=23 → bijective base-26: ((((6*26+2)*26+17)*26+21)*26+23) − 1 = 2,789,068
+    expect(min).toBe(2_789_068n);
+  });
+
+  it('returns 0 (single-letter "A") for the all-unlocked state', async () => {
+    installStatusMock('A');
+    expect(await getRuneMinimumFromOrd()).toBe(0n);
+  });
+
+  it('returns null on HTTP 5xx', async () => {
+    installStatusMock('FBQUW', 500);
+    expect(await getRuneMinimumFromOrd()).toBeNull();
+  });
+
+  it('returns null when minimum_rune_for_next_block is missing', async () => {
+    installStatusMock(undefined);
+    expect(await getRuneMinimumFromOrd()).toBeNull();
+  });
+
+  it('returns null on malformed rune name (lowercase / non-letter)', async () => {
+    installStatusMock('fbquw');
+    expect(await getRuneMinimumFromOrd()).toBeNull();
+  });
+
+  it('returns null on fetch failure (network/timeout/abort)', async () => {
+    global.fetch = vi.fn(async () => { throw new Error('network down'); }) as unknown as typeof fetch;
+    expect(await getRuneMinimumFromOrd()).toBeNull();
   });
 });

@@ -167,21 +167,48 @@ export function computeUnlockHeight(name: string): number {
 
 /**
  * Validate whether a specific rune name can be etched at the given block height.
- * Uses exact interpolation — not just character length.
+ *
+ * Three precedence levels for the minimum:
+ *  1. `runeMinimum` (authoritative — typically from ord `/status.minimum_rune_for_next_block`).
+ *     Chain-agnostic. Use this for testnet4 where the local computation is wrong.
+ *  2. Mainnet local computation via `minimumAtHeight(currentBlockHeight)` — only
+ *     correct for mainnet (`RUNES_ACTIVATION = 840000` is hard-coded).
+ *  3. Permissive testnet fallback — when caller has no authoritative minimum
+ *     AND can't trust the mainnet computation, accept the name. Caller is on
+ *     the hook for the catastrophe (Finding #11: BUDDY-style silent cenotaphs).
  */
 export function validateRuneName(
   name: string,
   currentBlockHeight: number,
-  /** Skip unlock-height check on testnet where block height is below runes activation */
+  /** Permissive fallback when `runeMinimum` is not supplied (legacy behavior). */
   isTestnet = false,
+  /** Authoritative chain rune-name minimum (e.g. from ord). Trumps local computation. */
+  runeMinimum: bigint | null = null,
 ): { valid: true } | { valid: false; error: string; unlockHeight?: number } {
   if (!/^[A-Z]+$/.test(name)) return { valid: false, error: 'Rune name must contain only letters A-Z' };
   if (name.length > 28) return { valid: false, error: 'Rune name cannot exceed 28 characters' };
 
-  // Testnet block heights are below runes activation — all names are available
+  // Authoritative path — use the supplied minimum regardless of chain. Fixes
+  // Finding #11 on testnet4 where mainnet `minimumAtHeight()` is wrong.
+  if (runeMinimum !== null) {
+    const nameValue = runeNameToU128(name);
+    if (nameValue < runeMinimum) {
+      const minName = u128ToRuneName(runeMinimum);
+      return {
+        valid: false,
+        error: `"${name}" is below the chain's current rune-name minimum "${minName}" (${minName.length} letters). Pick a name whose value is ≥ "${minName}", or use a commit-reveal mode that supplies a commitment.`,
+      };
+    }
+    return { valid: true };
+  }
+
+  // Permissive fallback — testnet without an authoritative minimum. Caller is
+  // expected to pass `runeMinimum` on testnet4; this branch is for testnet3 /
+  // regtest where runes are inactive.
   if (isTestnet) return { valid: true };
 
-  // Without a real chain tip we can't decide what's etchable — minimumAtHeight(0)
+  // Mainnet local computation. Pre-#11 behavior, unchanged.
+  // Without a real chain tip we can't decide what's etchable — `minimumAtHeight(0)`
   // would return the pre-activation minimum ("AAAAAAAAAAAAA") and produce a
   // misleading "must be 13 letters" message. Tell the caller to wait/retry.
   if (!currentBlockHeight || currentBlockHeight < 840000) {

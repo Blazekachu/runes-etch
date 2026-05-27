@@ -39,6 +39,7 @@ export default function BuildButton() {
   const reinscribeMode = useBuilderStore((s) => s.reinscribeMode);
   const targetUtxo = useBuilderStore((s) => s.targetUtxo);
   const targetVerifyState = useBuilderStore((s) => s.targetVerifyState);
+  const runeMinimum = useBuilderStore((s) => s.runeMinimum);
 
   const [loading, setLoading] = useState(false);
   const [grinding, setGrinding] = useState(false);
@@ -175,6 +176,7 @@ export default function BuildButton() {
         receiverAddress: wallet.taprootAddress, changeAddress: getChangeAddress(),
         internalPubkey, vanityNonce: new Uint8Array(0), currentBlockHeight, isTestnet,
         network: btcNetwork,
+        runeMinimum,
       });
       const template = serializeForTxid(templateResult.psbt);
 
@@ -203,6 +205,7 @@ export default function BuildButton() {
               receiverAddress: wallet.taprootAddress, changeAddress: getChangeAddress(),
               internalPubkey, vanityNonce: new Uint8Array(0), currentBlockHeight, isTestnet,
               locktime: foundLocktime, network: btcNetwork,
+              runeMinimum,
             });
 
             const txid = await signAndBroadcastPsbt(finalResult.psbt, finalResult.fee);
@@ -227,6 +230,7 @@ export default function BuildButton() {
       receiverAddress: wallet.taprootAddress, changeAddress: getChangeAddress(),
       internalPubkey, vanityNonce: new Uint8Array(0), currentBlockHeight, isTestnet,
       network: btcNetwork,
+      runeMinimum,
     });
 
     const txid = await signAndBroadcastPsbt(result.psbt, result.fee);

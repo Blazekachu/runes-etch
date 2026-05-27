@@ -1,5 +1,6 @@
 import type { OrdRuneResponse, OrdInscriptionResponse, OrdOutputResponse, OrdSatResponse, ParentInscription, UtxoSatInfo } from '@/types';
 import { mempoolBaseForAddress, getCurrentBlockHeight } from './mempool';
+import { runeNameToU128 } from '@/lib/runes/names';
 
 const PUBLIC_ORD_DEFAULT = 'https://ordinals.com';
 
@@ -135,6 +136,37 @@ export async function getRuneNameStatus(name: string): Promise<RuneNameStatus> {
 export async function checkRuneNameAvailable(name: string): Promise<boolean> {
   const status = await getRuneNameStatus(name);
   return status.state === 'available';
+}
+
+/**
+ * Fetch the chain's current rune-name minimum directly from ord's status.
+ * ord computes this per chain (mainnet vs testnet4 vs regtest), so this is
+ * authoritative for whatever chain the configured ord base points at.
+ *
+ * Used by callers to bypass the mainnet-only local `minimumAtHeight()`
+ * computation, which is wrong on testnet4 (Finding #11 — burned fees on
+ * silent cenotaph etches because the testnet branch was permissive).
+ *
+ * Returns null on any failure (ord unreachable, malformed response, public
+ * ord queried for a testnet wallet). Callers should treat null as "couldn't
+ * measure — fall back to the legacy behavior or refuse to broadcast".
+ */
+export async function getRuneMinimumFromOrd(): Promise<bigint | null> {
+  // Same skip as checkRuneNameAvailable: public ordinals.com is mainnet-only,
+  // queries for a testnet wallet would return mainnet rules.
+  if (_isTestnet && isPublicOrdForCurrentNetwork()) return null;
+  try {
+    const res = await fetchWithTimeout(`${ordBase()}/status`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { minimum_rune_for_next_block?: string };
+    const minName = data.minimum_rune_for_next_block;
+    if (!minName || !/^[A-Z]+$/.test(minName)) return null;
+    return runeNameToU128(minName);
+  } catch {
+    return null;
+  }
 }
 
 export async function getInscription(

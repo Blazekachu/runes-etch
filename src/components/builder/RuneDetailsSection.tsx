@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { validateRuneName, spacerBitmask } from '@/lib/runes/names';
-import { getRuneNameStatus } from '@/lib/api/ordinals';
+import { getRuneNameStatus, getRuneMinimumFromOrd } from '@/lib/api/ordinals';
 import { getCurrentBlockHeight } from '@/lib/api/mempool';
 import SectionWrapper from './SectionWrapper';
 
@@ -11,6 +11,8 @@ export default function RuneDetailsSection() {
   const etching = useBuilderStore((s) => s.etching);
   const updateEtching = useBuilderStore((s) => s.updateEtching);
   const setCurrentBlockHeight = useBuilderStore((s) => s.setCurrentBlockHeight);
+  const runeMinimum = useBuilderStore((s) => s.runeMinimum);
+  const setRuneMinimum = useBuilderStore((s) => s.setRuneMinimum);
   const wallet = useBuilderStore((s) => s.wallet);
   const phase = useBuilderStore((s) => s.phase);
   const isTestnet =
@@ -59,21 +61,33 @@ export default function RuneDetailsSection() {
   }
   useEffect(() => {
     let cancelled = false;
-    (async () => { if (!cancelled) await loadBlockHeight(); })();
+    (async () => {
+      if (cancelled) return;
+      await loadBlockHeight();
+      // #11: fetch the chain's authoritative rune-name minimum so quick-etch
+      // can reject below-minimum names on testnet4 (and any chain) before
+      // broadcasting a TX that ord would silently cenotaph.
+      if (cancelled) return;
+      const min = await getRuneMinimumFromOrd();
+      if (cancelled) return;
+      setRuneMinimum(min);
+    })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wallet.taprootAddress]);
 
-  // Re-validate the rune name when the block height arrives or changes.
-  // Without this, the keystroke-time validation persists with a stale
-  // (often zero) height and the user sees a misleading "loading" error
-  // even after the fetch completes.
+  // Re-validate the rune name when block height OR ord's minimum arrives or
+  // changes. Without these deps the keystroke-time validation would persist
+  // with a stale (often zero) height and the user sees a misleading "loading"
+  // error even after the fetch completes; without runeMinimum we'd miss the
+  // moment the testnet4 minimum lands and a previously-permissive name
+  // suddenly becomes below-minimum.
   useEffect(() => {
     if (!runeName) { setNameError(''); return; }
-    const v = validateRuneName(runeName, blockHeight, isTestnet);
+    const v = validateRuneName(runeName, blockHeight, isTestnet, runeMinimum);
     setNameError(v.valid ? '' : v.error);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blockHeight, isTestnet]);
+  }, [blockHeight, isTestnet, runeMinimum]);
 
   // Sync local input state FROM store when store changes externally (bundle load, reset).
   // Without these, useState's initial-value-only behavior would leave inputs at defaults
@@ -119,12 +133,12 @@ export default function RuneDetailsSection() {
     setAvailability(null);
     setAvailabilityMsg('');
     setSpacerPositions((prev) => prev.filter((p) => p < upper.length - 1));
-    const validation = validateRuneName(upper, blockHeight, isTestnet);
+    const validation = validateRuneName(upper, blockHeight, isTestnet, runeMinimum);
     setNameError(validation.valid ? '' : validation.error);
   }
 
   async function handleCheck() {
-    const validation = validateRuneName(runeName, blockHeight, isTestnet);
+    const validation = validateRuneName(runeName, blockHeight, isTestnet, runeMinimum);
     if (!validation.valid) {
       setNameError(validation.error);
       return;

@@ -171,6 +171,53 @@ describe('Rune name encoding', () => {
         expect(result.error).toContain('minimum');
       }
     });
+
+    // Finding #11 — testnet bypass was permissive on testnet4, letting BUDDY
+    // (value 1,285,880) etch when the chain's minimum was 2,789,068. New
+    // `runeMinimum` param takes precedence over isTestnet bypass.
+    describe('runeMinimum (Finding #11)', () => {
+      const TESTNET4_TIP = 136590;
+      const MIN_FBQUW = 2_789_068n; // current testnet4 minimum at session capture
+      const BUDDY_VALUE = runeNameToU128('BUDDY'); // 1,285,880
+
+      it('rejects BUDDY when runeMinimum is supplied even on testnet', () => {
+        const result = validateRuneName('BUDDY', TESTNET4_TIP, true, MIN_FBQUW);
+        expect(result.valid).toBe(false);
+        if (!result.valid) {
+          expect(result.error).toContain('FBQUW');
+          expect(result.error).toContain('BUDDY');
+        }
+        // Sanity — BUDDY's value must really be below the supplied minimum
+        expect(BUDDY_VALUE).toBeLessThan(MIN_FBQUW);
+      });
+
+      it('accepts a name above runeMinimum on testnet', () => {
+        // GHOSTS = 2,930,873 (just above FBQUW = 2,789,068)
+        const result = validateRuneName('GHOSTS', TESTNET4_TIP, true, MIN_FBQUW);
+        expect(result.valid).toBe(true);
+      });
+
+      it('runeMinimum trumps the legacy isTestnet permissive fallback', () => {
+        // Old behavior: testnet+below-min returned valid (bypass). New:
+        // when runeMinimum is supplied, the bypass doesn't apply.
+        const withMinimum = validateRuneName('BUDDY', TESTNET4_TIP, true, MIN_FBQUW);
+        const withoutMinimum = validateRuneName('BUDDY', TESTNET4_TIP, true, null);
+        expect(withMinimum.valid).toBe(false);
+        expect(withoutMinimum.valid).toBe(true); // legacy permissive
+      });
+
+      it('runeMinimum applies on mainnet too (chain-agnostic authority)', () => {
+        // Even with a fresh-tip mainnet block where local minimumAtHeight would
+        // be more permissive, the supplied minimum still gates.
+        const result = validateRuneName('BUDDY', 949303, false, MIN_FBQUW);
+        expect(result.valid).toBe(false);
+      });
+
+      it('preserves legacy testnet permissive when runeMinimum is null', () => {
+        const result = validateRuneName('BUDDY', TESTNET4_TIP, true);
+        expect(result.valid).toBe(true);
+      });
+    });
   });
 
   describe('computeUnlockHeight', () => {

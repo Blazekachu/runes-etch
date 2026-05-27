@@ -80,6 +80,10 @@ export function detectEtchMode(params: {
   runeName: string;
   currentBlockHeight: number;
   isTestnet: boolean;
+  /** Authoritative chain rune-name minimum (e.g. from ord). When set, used regardless
+   *  of network. Without it, mainnet falls back to local `minimumAtHeight()` and
+   *  testnet is permissive (legacy behavior — Finding #11). */
+  runeMinimum: bigint | null;
 }): DetectedMode {
   if (params.inscriptionFile || params.delegateInscriptionId) {
     return { mode: 'commit-reveal', reason: 'Inscription requires commit-reveal' };
@@ -87,9 +91,14 @@ export function detectEtchMode(params: {
   if (params.parentInscription) {
     return { mode: 'commit-reveal', reason: 'Parent linkage requires commit-reveal' };
   }
-  if (params.runeName && !params.isTestnet) {
-    const minValue = minimumAtHeight(params.currentBlockHeight);
-    if (minValue > 0n) {
+  if (params.runeName) {
+    let minValue: bigint | null = null;
+    if (params.runeMinimum !== null) {
+      minValue = params.runeMinimum;
+    } else if (!params.isTestnet) {
+      minValue = minimumAtHeight(params.currentBlockHeight);
+    }
+    if (minValue !== null && minValue > 0n) {
       try {
         const nameValue = runeNameToU128(params.runeName);
         if (nameValue < minValue) {
@@ -121,6 +130,18 @@ interface BuilderStore {
   // Block height
   currentBlockHeight: number;
   setCurrentBlockHeight: (h: number) => void;
+
+  /**
+   * Chain's current rune-name minimum from ord (`/status.minimum_rune_for_next_block`,
+   * converted to u128). Authoritative for whichever chain ord is configured to.
+   * `null` when ord is unreachable or we haven't fetched yet. Not persisted —
+   * refetched each session because it advances with the chain.
+   *
+   * Used by validateRuneName + buildQuickEtchTx to fix Finding #11 (testnet4
+   * silent cenotaph on below-minimum quick etches).
+   */
+  runeMinimum: bigint | null;
+  setRuneMinimum: (m: bigint | null) => void;
 
   // Wallet
   wallet: WalletState;
@@ -314,12 +335,16 @@ export const useBuilderStore = create<BuilderStore>()(
           runeName: s.etching.runeName,
           currentBlockHeight: s.currentBlockHeight,
           isTestnet,
+          runeMinimum: s.runeMinimum,
         });
         set({ detectedMode: result.mode, detectedReason: result.reason });
       },
 
       currentBlockHeight: 0,
       setCurrentBlockHeight: (h) => set({ currentBlockHeight: h }),
+
+      runeMinimum: null,
+      setRuneMinimum: (m) => set({ runeMinimum: m }),
 
       wallet: { connected: false, taprootAddress: '', paymentAddress: '', publicKey: '' },
       connectedAt: null,
@@ -564,6 +589,7 @@ export const useBuilderStore = create<BuilderStore>()(
         detectedMode: 'quick',
         detectedReason: 'All conditions met for single-TX etch',
         currentBlockHeight: 0,
+        runeMinimum: null,
         wallet: { connected: false, taprootAddress: '', paymentAddress: '', publicKey: '' },
         etching: { ...defaultEtching },
         inscriptionFile: null,
