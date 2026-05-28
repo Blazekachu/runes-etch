@@ -101,18 +101,41 @@ export default function FeeRateSection() {
           </button>
         </div>
 
+        {/* #7: feeError panel — visually distinct from the loading/disconnected
+            states so a real fetch failure can't be confused with "still loading".
+            Bigger text, warning icon, inline retry, explicit "what to do now". */}
         {feeError && (
-          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs text-red-400">
-            {feeError}
+          <div className="rounded-lg border-2 border-red-500/60 bg-red-500/15 px-4 py-3 text-sm text-red-300">
+            <div className="flex items-start gap-2">
+              <span className="text-base leading-none mt-0.5">⚠</span>
+              <div className="flex-1">
+                <div className="font-semibold text-red-200">Fee fetch failed</div>
+                <div className="mt-1 text-xs text-red-300/90 font-mono break-all">{feeError}</div>
+                <div className="mt-2 text-xs text-red-200">
+                  Presets are unavailable. Enter your own rate in the custom input,
+                  or{' '}
+                  <button
+                    onClick={loadFees}
+                    disabled={loadingFees}
+                    className="underline font-semibold hover:text-white disabled:opacity-40"
+                  >
+                    {loadingFees ? 'retrying…' : 'retry fetch'}
+                  </button>
+                  .
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
+        {/* Pre-connect: subdued yellow hint. Custom input still wired up. */}
         {!wallet.connected && (
           <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-xs text-yellow-400">
             Connect a wallet to fetch current fee rates. Custom input still works.
           </div>
         )}
 
+        {/* Mid-load: subdued gray hint. Custom input still wired up. */}
         {wallet.connected && !feeRates && !feeError && !loadingFees && (
           <div className="rounded-lg border border-gray-700 bg-gray-900 px-4 py-3 text-xs text-gray-400">
             Waiting for fee rates… presets disabled until they load. Custom input still works.
