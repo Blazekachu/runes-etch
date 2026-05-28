@@ -5,6 +5,7 @@ import { useBuilderStore } from '@/store/builderStore';
 import { parseBundle } from '@/lib/bundle/import';
 
 import WalletHeader from '@/components/builder/WalletHeader';
+import OrdHealthBanner from '@/components/builder/OrdHealthBanner';
 import RuneDetailsSection from '@/components/builder/RuneDetailsSection';
 import SupplyMintSection from '@/components/builder/SupplyMintSection';
 import InscriptionSection from '@/components/builder/InscriptionSection';
@@ -73,6 +74,7 @@ export default function EtchV2Page() {
   return (
     <div className="min-h-screen bg-gray-950 text-white">
       <WalletHeader />
+      <OrdHealthBanner />
 
       {/* Toolbar */}
       <div className="border-b border-gray-800 px-6 py-2">
