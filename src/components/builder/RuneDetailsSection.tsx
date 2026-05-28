@@ -238,15 +238,15 @@ export default function RuneDetailsSection() {
           {nameError && nameUnlockHeight !== null && blockHeight > 0 && (
             <div className="mt-1 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-300">
               <p>
-                ⏳ This name unlocks around block{' '}
+                ⏳ This name unlocks at block{' '}
                 <span className="font-mono font-semibold">
                   {nameUnlockHeight.toLocaleString()}
-                </span>{' '}
-                — roughly{' '}
+                </span>
+                {' '}— exactly{' '}
                 <span className="font-mono">
                   {Math.max(0, nameUnlockHeight - blockHeight).toLocaleString()}
-                </span>{' '}
-                blocks from the current tip (
+                </span>
+                {' '}blocks past the current tip (
                 <span className="font-mono">{blockHeight.toLocaleString()}</span>
                 ).
               </p>
@@ -254,9 +254,9 @@ export default function RuneDetailsSection() {
                 If you commit-reveal now, broadcast the reveal at or after that
                 block — earlier reveals will cenotaph.{' '}
                 <span className="font-semibold">Recommended:</span> after the
-                commit confirms, download the bundle (button appears on the
-                Waiting screen) so you can close this tab and resume the etch
-                when the name unlocks.
+                commit confirms, download the bundle (button on the Waiting
+                screen) so you can close this tab and resume the etch when the
+                name unlocks.
               </p>
             </div>
           )}

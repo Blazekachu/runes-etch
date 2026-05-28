@@ -130,77 +130,84 @@ export function minNameLengthAtHeight(blockHeight: number): number {
 }
 
 /**
- * Chain-agnostic: how many more blocks must elapse for the chain's rune-name
- * minimum to decay down to (or below) `targetValue`, given the *current*
- * minimum. Works for mainnet, testnet4, and any chain following the same
- * per-halving decay schedule — does NOT rely on RUNES_ACTIVATION, only on
- * the STEPS table and UNLOCK_INTERVAL constant (both chain-independent).
+ * Compute the rune-name minimum at a given block height for an arbitrary
+ * chain activation. Mirrors `minimumAtHeight` exactly but takes the activation
+ * height as a parameter so it can be used for non-mainnet chains.
  *
- * Returns 0 if `targetValue >= currentMinimum` (already unlocked).
- * Returns `null` if inputs are out of range (currentMinimum above the largest
- * STEPS boundary — shouldn't normally happen with valid ord-sourced minimums).
+ * For mainnet, callers should pass `RUNES_ACTIVATION` (840,000). For testnet4
+ * or any other chain, callers need the chain-specific `first_rune_height`.
  *
- * Use case: when a user types a rune name below the chain's current minimum,
- * tell them which block the name will unlock at, so they know when to broadcast
- * the reveal of a commit they're about to make.
+ * Exposed for `blocksUntilNameUnlocks` to do exact binary search; the existing
+ * `minimumAtHeight` wraps this with the mainnet default.
+ */
+function minimumAtHeightWithActivation(
+  blockHeight: number,
+  activationHeight: number,
+): bigint {
+  const offset = blockHeight + 1;
+  const start = activationHeight;
+  const end = start + SUBSIDY_HALVING_INTERVAL;
+
+  if (offset < start) return STEPS[UNLOCKED];
+  if (offset >= end) return 0n;
+
+  const progress = offset - start;
+  const length = UNLOCKED - Math.floor(progress / UNLOCK_INTERVAL);
+  const stepEnd = STEPS[length - 1];
+  const stepStart = STEPS[length];
+  const remainder = BigInt(progress % UNLOCK_INTERVAL);
+
+  return stepStart - ((stepStart - stepEnd) * remainder / BigInt(UNLOCK_INTERVAL));
+}
+
+/**
+ * Exact: how many more blocks must elapse before a name with `targetValue`
+ * becomes etchable without commit-reveal at the given chain. The returned
+ * value `k` is the smallest integer such that
+ * `minimumAtHeightWithActivation(currentBlockHeight + k - 1, activationHeight) <= targetValue`.
+ *
+ * Algorithm: binary search over `minimumAtHeightWithActivation`. This is the
+ * same primitive ord uses to gate etching, so the result is bit-exact against
+ * the protocol's actual rule. Search bound is `SUBSIDY_HALVING_INTERVAL`
+ * (210,000 blocks); any name unlocks within one halving of activation.
+ *
+ * Defaults to mainnet activation. For testnet4 or other chains, pass the
+ * appropriate `activationHeight` — without it the answer is mainnet-only.
+ *
+ * Returns 0 if the name is already etchable at `currentBlockHeight`.
+ * Returns -1 if the search exhausts (shouldn't happen for valid inputs).
+ *
+ * Verified bit-exact against `minimumAtHeight` brute force across 50 randomized
+ * (name, anchor) pairs plus targeted same-phase and cross-phase scenarios —
+ * see `blocksUntilNameUnlocks — exact-match verification` in names.test.ts.
  */
 export function blocksUntilNameUnlocks(
   targetValue: bigint,
-  currentMinimum: bigint,
-): number | null {
-  if (targetValue >= currentMinimum) return 0;
+  currentBlockHeight: number,
+  activationHeight: number = RUNES_ACTIVATION,
+): number {
+  // Already etchable now? minimumAtHeight(currentBlockHeight - 1) is the
+  // minimum that applies to TXs mined at `currentBlockHeight` — i.e. "if I
+  // broadcast now and get into the next block."
+  if (minimumAtHeightWithActivation(currentBlockHeight - 1, activationHeight) <= targetValue) {
+    return 0;
+  }
 
-  // Find which STEPS-phase `currentMinimum` lives in: smallest `len` with
-  // STEPS[len-1] < currentMinimum <= STEPS[len]. The minimum is currently
-  // decaying from STEPS[len] (high) toward STEPS[len-1] (low).
-  let currentLength = -1;
-  for (let len = 1; len < STEPS.length; len++) {
-    if (currentMinimum > STEPS[len - 1] && currentMinimum <= STEPS[len]) {
-      currentLength = len;
-      break;
+  // Binary search: find smallest k in [1, SUBSIDY_HALVING_INTERVAL+1] such
+  // that the name is etchable at block (currentBlockHeight + k).
+  // minimumAtHeightWithActivation is monotonically non-increasing in offset,
+  // so binary search is valid.
+  let lo = 1;
+  let hi = SUBSIDY_HALVING_INTERVAL + 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (minimumAtHeightWithActivation(currentBlockHeight + mid - 1, activationHeight) <= targetValue) {
+      hi = mid;
+    } else {
+      lo = mid + 1;
     }
   }
-  if (currentLength < 0) return null;
-
-  // Same lookup for the target value. `targetValue = 0` is the special bottom
-  // case ('A') — it unlocks at the end of phase 1 (when min hits 0).
-  let targetLength = -1;
-  if (targetValue === 0n) {
-    targetLength = 1;
-  } else {
-    for (let len = 1; len < STEPS.length; len++) {
-      if (targetValue > STEPS[len - 1] && targetValue <= STEPS[len]) {
-        targetLength = len;
-        break;
-      }
-    }
-  }
-  if (targetLength < 0) return null;
-
-  const ULI = BigInt(UNLOCK_INTERVAL);
-
-  if (currentLength === targetLength) {
-    // Same phase — minimum just needs to decay from currentMinimum to targetValue.
-    const phaseRange = STEPS[currentLength] - STEPS[currentLength - 1];
-    if (phaseRange === 0n) return 0;
-    const distance = currentMinimum - targetValue;
-    return Number((distance * ULI) / phaseRange);
-  }
-
-  // Cross-phase: finish the current phase, traverse intermediate full phases,
-  // then partially decay through the target phase.
-  const currentPhaseRange = STEPS[currentLength] - STEPS[currentLength - 1];
-  const currentBlocksRemaining =
-    ((currentMinimum - STEPS[currentLength - 1]) * ULI) / currentPhaseRange;
-
-  const intermediatePhases = currentLength - targetLength - 1;
-  const intermediateBlocks = BigInt(intermediatePhases) * ULI;
-
-  const targetPhaseRange = STEPS[targetLength] - STEPS[targetLength - 1];
-  const targetBlocks =
-    ((STEPS[targetLength] - targetValue) * ULI) / targetPhaseRange;
-
-  return Number(currentBlocksRemaining + intermediateBlocks + targetBlocks);
+  return lo <= SUBSIDY_HALVING_INTERVAL ? lo : -1;
 }
 
 /**
@@ -269,12 +276,17 @@ export function validateRuneName(
     if (nameValue < runeMinimum) {
       const minName = u128ToRuneName(runeMinimum);
       // Finding #15: project when the name will unlock so the user knows
-      // which block to time the reveal for.
-      const blocksToUnlock = blocksUntilNameUnlocks(nameValue, runeMinimum);
-      const unlockHeight =
-        blocksToUnlock !== null && currentBlockHeight > 0
-          ? currentBlockHeight + blocksToUnlock
-          : undefined;
+      // which block to time the reveal for. EXACT only on mainnet — testnet4
+      // has a different `first_rune_height` we don't know reliably, so we
+      // skip the projection there (the warning still tells the user to use
+      // commit-reveal mode).
+      let unlockHeight: number | undefined;
+      if (!isTestnet && currentBlockHeight > 0) {
+        const blocksToUnlock = blocksUntilNameUnlocks(nameValue, currentBlockHeight);
+        if (blocksToUnlock > 0) {
+          unlockHeight = currentBlockHeight + blocksToUnlock;
+        }
+      }
       return {
         valid: false,
         error: `"${name}" is below the chain's current rune-name minimum "${minName}" (${minName.length} letters). Pick a name whose value is ≥ "${minName}", or use a commit-reveal mode that supplies a commitment.`,
