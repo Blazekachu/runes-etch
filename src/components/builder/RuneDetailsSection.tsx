@@ -173,9 +173,15 @@ export default function RuneDetailsSection() {
         setAvailabilityMsg('Name is already taken.');
       } else {
         setAvailability('unknown');
-        setAvailabilityMsg(
-          `Indexer is ${status.behind} blocks behind chain tip (ord at ${status.indexerHeight}, tip at ${status.chainHeight}). Name appears unused but cannot be confirmed — wait for the indexer to catch up before broadcasting.`
-        );
+        if (status.reason === 'indexer-wedged') {
+          setAvailabilityMsg(
+            `Indexer wedged on a reorg (ord at ${status.indexerHeight}, tip at ${status.chainHeight}, ${status.behind} blocks behind). Name uniqueness cannot be checked from this indexer — verify out-of-band via mempool.space, ordiscan, or ord.net before broadcasting.`
+          );
+        } else {
+          setAvailabilityMsg(
+            `Indexer is ${status.behind} blocks behind chain tip (ord at ${status.indexerHeight}, tip at ${status.chainHeight}). Name appears unused but cannot be confirmed — wait for the indexer to catch up before broadcasting.`
+          );
+        }
       }
     } catch {
       setAvailability('error');
