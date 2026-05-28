@@ -43,6 +43,11 @@ export default function RuneDetailsSection() {
   const [availability, setAvailability] = useState<'available' | 'taken' | 'unknown' | 'error' | null>(null);
   const [availabilityMsg, setAvailabilityMsg] = useState('');
   const [nameError, setNameError] = useState('');
+  /** Projected block height at which a below-minimum name will unlock for
+   *  quick-etch. Set by validateRuneName when name is below the chain's
+   *  current minimum. Used to advise the user when to broadcast the reveal
+   *  if they commit now. (Finding #15) */
+  const [nameUnlockHeight, setNameUnlockHeight] = useState<number | null>(null);
 
   // Fetch block height on mount AND whenever the wallet network changes — mainnet
   // and testnet have very different tips, so a network switch in-session would
@@ -83,9 +88,15 @@ export default function RuneDetailsSection() {
   // moment the testnet4 minimum lands and a previously-permissive name
   // suddenly becomes below-minimum.
   useEffect(() => {
-    if (!runeName) { setNameError(''); return; }
+    if (!runeName) { setNameError(''); setNameUnlockHeight(null); return; }
     const v = validateRuneName(runeName, blockHeight, isTestnet, runeMinimum);
-    setNameError(v.valid ? '' : v.error);
+    if (v.valid) {
+      setNameError('');
+      setNameUnlockHeight(null);
+    } else {
+      setNameError(v.error);
+      setNameUnlockHeight(v.unlockHeight ?? null);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blockHeight, isTestnet, runeMinimum]);
 
@@ -134,13 +145,20 @@ export default function RuneDetailsSection() {
     setAvailabilityMsg('');
     setSpacerPositions((prev) => prev.filter((p) => p < upper.length - 1));
     const validation = validateRuneName(upper, blockHeight, isTestnet, runeMinimum);
-    setNameError(validation.valid ? '' : validation.error);
+    if (validation.valid) {
+      setNameError('');
+      setNameUnlockHeight(null);
+    } else {
+      setNameError(validation.error);
+      setNameUnlockHeight(validation.unlockHeight ?? null);
+    }
   }
 
   async function handleCheck() {
     const validation = validateRuneName(runeName, blockHeight, isTestnet, runeMinimum);
     if (!validation.valid) {
       setNameError(validation.error);
+      setNameUnlockHeight(validation.unlockHeight ?? null);
       return;
     }
     setChecking(true);
@@ -217,6 +235,31 @@ export default function RuneDetailsSection() {
             </button>
           </div>
           {nameError && <p className="text-xs text-red-400">{nameError}</p>}
+          {nameError && nameUnlockHeight !== null && blockHeight > 0 && (
+            <div className="mt-1 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-300">
+              <p>
+                ⏳ This name unlocks around block{' '}
+                <span className="font-mono font-semibold">
+                  {nameUnlockHeight.toLocaleString()}
+                </span>{' '}
+                — roughly{' '}
+                <span className="font-mono">
+                  {Math.max(0, nameUnlockHeight - blockHeight).toLocaleString()}
+                </span>{' '}
+                blocks from the current tip (
+                <span className="font-mono">{blockHeight.toLocaleString()}</span>
+                ).
+              </p>
+              <p className="mt-1">
+                If you commit-reveal now, broadcast the reveal at or after that
+                block — earlier reveals will cenotaph.{' '}
+                <span className="font-semibold">Recommended:</span> after the
+                commit confirms, download the bundle (button appears on the
+                Waiting screen) so you can close this tab and resume the etch
+                when the name unlocks.
+              </p>
+            </div>
+          )}
           {availability === 'available' && <p className="text-xs text-green-400">{availabilityMsg}</p>}
           {availability === 'taken' && <p className="text-xs text-red-400">{availabilityMsg}</p>}
           {availability === 'unknown' && <p className="text-xs text-yellow-400">⚠ {availabilityMsg}</p>}

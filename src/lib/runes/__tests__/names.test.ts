@@ -7,6 +7,7 @@ import {
   minNameLengthAtHeight,
   computeUnlockHeight,
   validateRuneName,
+  blocksUntilNameUnlocks,
 } from '../names';
 
 describe('Rune name encoding', () => {
@@ -231,6 +232,74 @@ describe('Rune name encoding', () => {
       const z6 = computeUnlockHeight('ZZZZZZ');
       const a6 = computeUnlockHeight('AAAAAA');
       expect(z6).toBeLessThan(a6);
+    });
+  });
+
+  // Finding #15 — chain-agnostic projection of when a name will unlock,
+  // computed from the current minimum (e.g. ord's reported value) instead
+  // of using the hard-coded mainnet RUNES_ACTIVATION constant.
+  describe('blocksUntilNameUnlocks (Finding #15)', () => {
+    it('returns 0 when target is already at or above the current minimum', () => {
+      expect(blocksUntilNameUnlocks(2_789_068n, 2_789_068n)).toBe(0);
+      expect(blocksUntilNameUnlocks(5_000_000n, 2_789_068n)).toBe(0);
+      expect(blocksUntilNameUnlocks(99_999_999_999n, 1_000_000_000n)).toBe(0);
+    });
+
+    it('PUPPET below QOMKIH — user-shared mainnet scenario, same 6-char phase', () => {
+      const puppet = runeNameToU128('PUPPET');
+      const qomkih = runeNameToU128('QOMKIH');
+      const blocks = blocksUntilNameUnlocks(puppet, qomkih);
+      expect(blocks).not.toBeNull();
+      expect(blocks).toBeGreaterThan(0);
+      // Intra-phase delay can't exceed one UNLOCK_INTERVAL (17,500 blocks).
+      expect(blocks!).toBeLessThan(17_500);
+    });
+
+    it('BUDDY below FBQUW — testnet4 scenario from this session', () => {
+      const buddy = runeNameToU128('BUDDY');  // 1,285,880
+      const fbquw = 2_789_068n;
+      const blocks = blocksUntilNameUnlocks(buddy, fbquw);
+      expect(blocks).not.toBeNull();
+      expect(blocks!).toBeGreaterThan(0);
+    });
+
+    it('cross-phase: "A" (value 0) requires many phases of decay from a high minimum', () => {
+      const stepsTop = 99_246_114_928_149_462n;  // STEPS[12], 13-char threshold
+      const result = blocksUntilNameUnlocks(0n, stepsTop);
+      expect(result).not.toBeNull();
+      // 12 phases × 17,500 = 210,000 blocks (one halving) to reach 0 from STEPS[12].
+      expect(result!).toBeGreaterThan(200_000);
+      expect(result!).toBeLessThanOrEqual(210_000);
+    });
+
+    it('chain-agnostic: function does not depend on RUNES_ACTIVATION', () => {
+      // Same (target, currentMin) → same answer, whether caller is on mainnet,
+      // testnet4, signet, or regtest. RUNES_ACTIVATION is mainnet-only.
+      const a = blocksUntilNameUnlocks(runeNameToU128('BUDDY'), 2_789_068n);
+      const b = blocksUntilNameUnlocks(runeNameToU128('BUDDY'), 2_789_068n);
+      expect(a).toBe(b);
+    });
+  });
+
+  // Finding #15 — validateRuneName now populates `unlockHeight` so the UI
+  // can advise the user when to broadcast the reveal of a commit they're
+  // about to make for a below-minimum name.
+  describe('validateRuneName unlockHeight (Finding #15)', () => {
+    it('populates unlockHeight for below-minimum names when blockHeight is known', () => {
+      const result = validateRuneName('BUDDY', 136_590, true, 2_789_068n);
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.unlockHeight).toBeDefined();
+        expect(result.unlockHeight!).toBeGreaterThan(136_590);
+      }
+    });
+
+    it('omits unlockHeight when blockHeight is 0 (not yet loaded)', () => {
+      const result = validateRuneName('BUDDY', 0, true, 2_789_068n);
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.unlockHeight).toBeUndefined();
+      }
     });
   });
 });

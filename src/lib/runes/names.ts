@@ -130,6 +130,80 @@ export function minNameLengthAtHeight(blockHeight: number): number {
 }
 
 /**
+ * Chain-agnostic: how many more blocks must elapse for the chain's rune-name
+ * minimum to decay down to (or below) `targetValue`, given the *current*
+ * minimum. Works for mainnet, testnet4, and any chain following the same
+ * per-halving decay schedule — does NOT rely on RUNES_ACTIVATION, only on
+ * the STEPS table and UNLOCK_INTERVAL constant (both chain-independent).
+ *
+ * Returns 0 if `targetValue >= currentMinimum` (already unlocked).
+ * Returns `null` if inputs are out of range (currentMinimum above the largest
+ * STEPS boundary — shouldn't normally happen with valid ord-sourced minimums).
+ *
+ * Use case: when a user types a rune name below the chain's current minimum,
+ * tell them which block the name will unlock at, so they know when to broadcast
+ * the reveal of a commit they're about to make.
+ */
+export function blocksUntilNameUnlocks(
+  targetValue: bigint,
+  currentMinimum: bigint,
+): number | null {
+  if (targetValue >= currentMinimum) return 0;
+
+  // Find which STEPS-phase `currentMinimum` lives in: smallest `len` with
+  // STEPS[len-1] < currentMinimum <= STEPS[len]. The minimum is currently
+  // decaying from STEPS[len] (high) toward STEPS[len-1] (low).
+  let currentLength = -1;
+  for (let len = 1; len < STEPS.length; len++) {
+    if (currentMinimum > STEPS[len - 1] && currentMinimum <= STEPS[len]) {
+      currentLength = len;
+      break;
+    }
+  }
+  if (currentLength < 0) return null;
+
+  // Same lookup for the target value. `targetValue = 0` is the special bottom
+  // case ('A') — it unlocks at the end of phase 1 (when min hits 0).
+  let targetLength = -1;
+  if (targetValue === 0n) {
+    targetLength = 1;
+  } else {
+    for (let len = 1; len < STEPS.length; len++) {
+      if (targetValue > STEPS[len - 1] && targetValue <= STEPS[len]) {
+        targetLength = len;
+        break;
+      }
+    }
+  }
+  if (targetLength < 0) return null;
+
+  const ULI = BigInt(UNLOCK_INTERVAL);
+
+  if (currentLength === targetLength) {
+    // Same phase — minimum just needs to decay from currentMinimum to targetValue.
+    const phaseRange = STEPS[currentLength] - STEPS[currentLength - 1];
+    if (phaseRange === 0n) return 0;
+    const distance = currentMinimum - targetValue;
+    return Number((distance * ULI) / phaseRange);
+  }
+
+  // Cross-phase: finish the current phase, traverse intermediate full phases,
+  // then partially decay through the target phase.
+  const currentPhaseRange = STEPS[currentLength] - STEPS[currentLength - 1];
+  const currentBlocksRemaining =
+    ((currentMinimum - STEPS[currentLength - 1]) * ULI) / currentPhaseRange;
+
+  const intermediatePhases = currentLength - targetLength - 1;
+  const intermediateBlocks = BigInt(intermediatePhases) * ULI;
+
+  const targetPhaseRange = STEPS[targetLength] - STEPS[targetLength - 1];
+  const targetBlocks =
+    ((STEPS[targetLength] - targetValue) * ULI) / targetPhaseRange;
+
+  return Number(currentBlocksRemaining + intermediateBlocks + targetBlocks);
+}
+
+/**
  * Compute the block height at which a specific name becomes available.
  * This accounts for the interpolation — shorter alphabetical names
  * within a length class unlock later than longer ones.
@@ -194,9 +268,17 @@ export function validateRuneName(
     const nameValue = runeNameToU128(name);
     if (nameValue < runeMinimum) {
       const minName = u128ToRuneName(runeMinimum);
+      // Finding #15: project when the name will unlock so the user knows
+      // which block to time the reveal for.
+      const blocksToUnlock = blocksUntilNameUnlocks(nameValue, runeMinimum);
+      const unlockHeight =
+        blocksToUnlock !== null && currentBlockHeight > 0
+          ? currentBlockHeight + blocksToUnlock
+          : undefined;
       return {
         valid: false,
         error: `"${name}" is below the chain's current rune-name minimum "${minName}" (${minName.length} letters). Pick a name whose value is ≥ "${minName}", or use a commit-reveal mode that supplies a commitment.`,
+        unlockHeight,
       };
     }
     return { valid: true };
