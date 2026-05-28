@@ -150,6 +150,10 @@ export interface OrdInscriptionResponse {
   address: string;
   output: string;
   content_type: string;
+  /** "txid:vout:offset" — location of the inscription's sat within the UTXO. */
+  satpoint: string;
+  /** Sat number this inscription is on. Used to resolve a delegate target back to its UTXO. */
+  sat: number;
 }
 
 export interface OrdOutputResponse {
@@ -172,6 +176,10 @@ export interface OrdSatResponse {
   epoch: number;
   period: number;
   decimal: string;
+  /** "txid:vout:offset" — current on-chain location of this sat. */
+  satpoint: string;
+  /** Current owner address. Used by resolveTarget to verify the user controls the sat. */
+  address: string;
 }
 
 /** Rarity info we cache per UTXO — derived from ord's /output + /sat endpoints. */

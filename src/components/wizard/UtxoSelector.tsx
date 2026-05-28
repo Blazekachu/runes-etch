@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useEtchStore } from '@/store/etchStore';
 import { fetchUtxos } from '@/lib/api/mempool';
-import { labelUtxos } from '@/lib/api/ordinals';
+import { labelUtxos, type UtxoLabel } from '@/lib/api/ordinals';
 import type { LabeledUtxo } from '@/types';
 
 /** Estimate how many sats the commit TX needs (commit output + 1-input commit fee). */
@@ -98,7 +98,10 @@ export default function UtxoSelector({ onNext, onBack }: { onNext?: () => void; 
       const taprootList = allRaw.filter((u) => u.source === 'taproot');
       const paymentList = allRaw.filter((u) => u.source === 'payment');
 
-      let labelMap = new Map<string, 'plain' | 'inscription' | 'rune' | 'unknown'>();
+      // labelUtxos returns Map<string, UtxoLabel> where UtxoLabel = { label, inscriptionIds }
+      // (refactored when bundle resume needed the inscription IDs). Wizard only consumes
+      // the `label` string here.
+      let labelMap = new Map<string, UtxoLabel>();
       let labelWarning = false;
       if (taprootList.length > 0) {
         try { labelMap = await labelUtxos(taprootList); } catch { labelWarning = true; }
@@ -107,7 +110,7 @@ export default function UtxoSelector({ onNext, onBack }: { onNext?: () => void; 
       const labeled: LabeledUtxo[] = [
         ...taprootList.map((u) => ({
           ...u,
-          label: (labelMap.get(`${u.txid}:${u.vout}`) ?? 'plain') as LabeledUtxo['label'],
+          label: labelMap.get(`${u.txid}:${u.vout}`)?.label ?? 'plain',
           selected: false,
         })),
         ...paymentList.map((u) => ({
