@@ -4,7 +4,11 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { fetchUtxos, setMempoolNetwork } from '@/lib/api/mempool';
 import { fetchUtxoSatInfo, isOrdinalsTestnet, setOrdinalsTestnet } from '@/lib/api/ordinals';
-import { estimateQuickEtchVBytes } from '@/lib/runes/quickEtch';
+import {
+  estimateQuickEtchVBytes,
+  type EstimatorInput,
+  type EstimatorOutput,
+} from '@/lib/runes/quickEtch';
 import type { LabeledUtxo, SatRarity } from '@/types';
 import SectionWrapper from './SectionWrapper';
 
@@ -12,7 +16,15 @@ import SectionWrapper from './SectionWrapper';
  *  Takes commit and reveal rates separately to match commit.ts — the reveal-budget
  *  portion of commit.vout[0] is sized by revealFeeRate, the commit fee by
  *  commitFeeRate. Caller should pass revealFeeRate = commitFeeRate when the user
- *  picks "match commit" (i.e. selectedRevealFeeRate is null). */
+ *  picks "match commit" (i.e. selectedRevealFeeRate is null).
+ *
+ *  #9: per-type sizing via the same `estimateQuickEtchVBytes` we calibrated for
+ *  Finding #1 (the BUDDY etch overshoot). Previously this function hand-rolled
+ *  `outputs * 43` (assuming every output is P2TR) and added a stray `+ 50`
+ *  buffer — same anti-pattern Finding #1 killed in quickEtch.ts. On mainnet
+ *  at 200 sat/vB that overcounted reveal vsize by ~12 vB × outputs (~2.4k sats
+ *  wasted on the commit's pre-funded reveal budget) and the commit TX by ~12
+ *  vB (~2.4k sats overpaid). */
 function estimateCost(
   commitFeeRate: number,
   revealFeeRate: number,
@@ -20,19 +32,39 @@ function estimateCost(
   hasParent: boolean,
   contentSize: number,
 ): number {
-  // Reveal vbytes (same formula as commit.ts estimateRevealVBytes)
-  const revealVB = Math.ceil(
-    10.5 + 57.5 + Math.ceil(contentSize / 4) +
-    (hasParent ? 57.5 : 0) +
-    ((hasInscription ? 1 : 0) + (hasParent ? 1 : 0) + 1 + 1) * 43 + 50
-  );
+  // ---- Reveal TX ----
+  // Inputs: 1 p2tr (the commit output, script-path-spend) plus optional parent p2tr
+  // (key-path-spend). Inscription content lives in the script-path witness — we
+  // add its vsize contribution separately below (witness discount = bytes / 4).
+  const revealInputs: EstimatorInput[] = [{ type: 'p2tr' }];
+  if (hasParent) revealInputs.push({ type: 'p2tr' });
+
+  // Outputs (matches reveal.ts construction):
+  //   - 1 p2tr rune-receiver dust (always; the premine's pointer-target sat)
+  //   - 1 p2tr parent-return dust (only if hasParent)
+  //   - 1 OP_RETURN runestone, ~25 bytes typical
+  //   - 1 p2wpkh change to payment (#12 — segwit, not taproot)
+  const revealOutputs: EstimatorOutput[] = [{ type: 'p2tr' }];
+  if (hasParent) revealOutputs.push({ type: 'p2tr' });
+  revealOutputs.push({ type: 'op_return', scriptByteLen: 25 });
+  revealOutputs.push({ type: 'p2wpkh' });
+
+  const baseRevealVB = estimateQuickEtchVBytes(revealInputs, revealOutputs);
+  const witnessContentVB = hasInscription ? Math.ceil(contentSize / 4) : 0;
+  const revealVB = baseRevealVB + witnessContentVB;
   const revealFee = Math.ceil(revealVB * revealFeeRate);
+
   const inscDust = hasInscription ? 546 : 0;
   const parentDust = hasParent ? 546 : 0;
   const commitOutputValue = revealFee + inscDust + parentDust + 546;
 
-  // Commit TX fee estimate (1 input, 2 outputs)
-  const commitVB = Math.ceil(10.5 + 68 + 2 * 43); // use P2WPKH size (worst case)
+  // ---- Commit TX ----
+  // Inputs: 1 p2wpkh (payment funding). Outputs: 1 p2tr (commit address) +
+  // 1 p2wpkh (change to payment per #12).
+  const commitVB = estimateQuickEtchVBytes(
+    [{ type: 'p2wpkh' }],
+    [{ type: 'p2tr' }, { type: 'p2wpkh' }],
+  );
   const commitFee = Math.ceil(commitVB * commitFeeRate);
 
   return commitOutputValue + commitFee;
