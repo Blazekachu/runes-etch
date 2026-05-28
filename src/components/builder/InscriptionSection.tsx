@@ -6,7 +6,7 @@ import { getInscription } from '@/lib/api/ordinals';
 import { MAX_INSCRIPTION_SIZE } from '@/types';
 import SectionWrapper from './SectionWrapper';
 
-type InscriptionMode = 'file' | 'delegate';
+type InscriptionMode = 'file' | 'text' | 'delegate';
 
 /**
  * MIME types ord's renderer recognizes (per ord 0.27 inscription media table).
@@ -60,9 +60,12 @@ export default function InscriptionSection() {
   const wallet = useBuilderStore((s) => s.wallet);
   const isTestnet = wallet.taprootAddress.startsWith('tb1');
 
-  const [inscriptionMode, setInscriptionMode] = useState<InscriptionMode>(
-    delegateInscriptionId ? 'delegate' : 'file'
-  );
+  const [inscriptionMode, setInscriptionMode] = useState<InscriptionMode>(() => {
+    if (delegateInscriptionId) return 'delegate';
+    // #3: bundle resume picks 'text' mode when the loaded inscription is text/plain.
+    if (inscriptionFile?.contentType.startsWith('text/plain')) return 'text';
+    return 'file';
+  });
 
   // File upload state
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -73,6 +76,16 @@ export default function InscriptionSection() {
    *  raw data on chain), but the user sees a clear note before broadcasting. */
   const [mimeWarning, setMimeWarning] = useState<string | null>(null);
   const MAX_FILE_SIZE = MAX_INSCRIPTION_SIZE;
+
+  // #3: text-inscription state. Mirror the bytes back to the store as a
+  // text/plain inscription so the rest of the builder treats it identically
+  // to a file upload.
+  const [textContent, setTextContent] = useState<string>(() => {
+    if (inscriptionFile?.contentType.startsWith('text/plain')) {
+      try { return new TextDecoder().decode(inscriptionFile.body); } catch { return ''; }
+    }
+    return '';
+  });
 
   // Delegate state
   const [delegateId, setDelegateId] = useState(delegateInscriptionId ?? '');
@@ -97,6 +110,7 @@ export default function InscriptionSection() {
   // Re-infer mode whenever store contents change (bundle resume picks the right tab).
   useEffect(() => {
     if (delegateInscriptionId) setInscriptionMode('delegate');
+    else if (inscriptionFile?.contentType.startsWith('text/plain')) setInscriptionMode('text');
     else if (inscriptionFile) setInscriptionMode('file');
   }, [delegateInscriptionId, inscriptionFile]);
 
@@ -105,13 +119,50 @@ export default function InscriptionSection() {
   function switchMode(mode: InscriptionMode) {
     setInscriptionMode(mode);
     if (mode === 'file') {
+      // Leaving delegate/text → clear those, keep file ready.
       setDelegateInscriptionId(null);
       setDelegateId('');
       setDelegateVerify('idle');
+      setTextContent('');
+      // If the current inscriptionFile is text/plain, clear it; user is
+      // switching to the file-upload flow.
+      if (inscriptionFile?.contentType.startsWith('text/plain')) setInscriptionFile(null);
+    } else if (mode === 'text') {
+      setDelegateInscriptionId(null);
+      setDelegateId('');
+      setDelegateVerify('idle');
+      // If the current inscriptionFile is non-text, clear it; we're switching
+      // to the text flow. Preserve existing text-plain content if present.
+      if (inscriptionFile && !inscriptionFile.contentType.startsWith('text/plain')) {
+        setInscriptionFile(null);
+        setFileError(null);
+        setMimeWarning(null);
+      }
     } else {
+      // delegate
       setInscriptionFile(null);
       setFileError(null);
+      setMimeWarning(null);
+      setTextContent('');
     }
+  }
+
+  // #3: convert text → inscription file on every change. `text/plain;charset=utf-8`
+  // is in ord's renderer allowlist so it renders cleanly. Empty text clears the
+  // inscription so the builder treats it as "no inscription".
+  function handleTextChange(value: string) {
+    setTextContent(value);
+    if (value.length === 0) {
+      setInscriptionFile(null);
+      return;
+    }
+    const bytes = new TextEncoder().encode(value);
+    if (bytes.length > MAX_FILE_SIZE) {
+      setFileError(`Text too long (${bytes.length} bytes). Maximum is ${MAX_FILE_SIZE} bytes.`);
+      return;
+    }
+    setFileError(null);
+    setInscriptionFile({ contentType: 'text/plain;charset=utf-8', body: bytes });
   }
 
   // --- File upload ---
@@ -213,6 +264,16 @@ export default function InscriptionSection() {
             Upload File
           </button>
           <button
+            onClick={() => switchMode('text')}
+            className={`flex-1 rounded-lg border px-4 py-2.5 text-sm font-semibold transition-colors ${
+              inscriptionMode === 'text'
+                ? 'border-orange-500 bg-orange-500/10 text-orange-400'
+                : 'border-gray-700 bg-gray-900 text-gray-400 hover:border-gray-600'
+            }`}
+          >
+            Text
+          </button>
+          <button
             onClick={() => switchMode('delegate')}
             className={`flex-1 rounded-lg border px-4 py-2.5 text-sm font-semibold transition-colors ${
               inscriptionMode === 'delegate'
@@ -284,6 +345,40 @@ export default function InscriptionSection() {
             )}
           </div>
         )}
+
+        {/* Text mode */}
+        {inscriptionMode === 'text' && (() => {
+          const byteLen = new TextEncoder().encode(textContent).length;
+          return (
+            <div className="flex flex-col gap-2">
+              <label className="text-sm font-medium text-gray-300">
+                Inscription Text
+              </label>
+              <p className="text-xs text-gray-500">
+                Inline text/plain inscription — no file needed. Useful when you
+                just want a short note attached to the etch (e.g. dedication,
+                stamp, message). The runestone occupies the OP_RETURN, so an
+                inscription envelope is the only way to attach text to your etch.
+              </p>
+              <textarea
+                value={textContent}
+                onChange={(e) => handleTextChange(e.target.value)}
+                placeholder="One-line message, short snippet, JSON, anything text/plain…"
+                rows={4}
+                className="rounded-lg border border-gray-700 bg-gray-900 px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:border-orange-500 focus:outline-none font-mono resize-y"
+              />
+              <div className="flex justify-between text-xs text-gray-500 font-mono">
+                <span>{textContent.length.toLocaleString()} chars</span>
+                <span>{byteLen.toLocaleString()} bytes (UTF-8) / {MAX_FILE_SIZE.toLocaleString()} max</span>
+              </div>
+              {fileError && (
+                <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+                  {fileError}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Delegate mode */}
         {inscriptionMode === 'delegate' && (
