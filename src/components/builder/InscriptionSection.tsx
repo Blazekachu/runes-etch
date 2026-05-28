@@ -8,6 +8,50 @@ import SectionWrapper from './SectionWrapper';
 
 type InscriptionMode = 'file' | 'delegate';
 
+/**
+ * MIME types ord's renderer recognizes (per ord 0.27 inscription media table).
+ * Inscriptions outside this list confirm and stay on-chain forever but won't
+ * render in ord.net, ordiscan, ordinals.com, etc. — they appear as "unknown
+ * content". The tool still allows broadcasting (some users want raw data),
+ * but warns the user before they commit fees.
+ */
+const ORD_SUPPORTED_MIMES: ReadonlySet<string> = new Set([
+  // image
+  'image/apng', 'image/avif', 'image/gif', 'image/jpeg', 'image/png',
+  'image/svg+xml', 'image/webp',
+  // audio
+  'audio/flac', 'audio/midi', 'audio/mpeg', 'audio/ogg', 'audio/wav',
+  // video
+  'video/mp4', 'video/webm',
+  // text
+  'text/css', 'text/html', 'text/javascript', 'text/markdown', 'text/plain',
+  'text/xml',
+  // application
+  'application/cbor', 'application/json', 'application/pdf',
+  'application/protobuf', 'application/x-bittorrent', 'application/yaml',
+  'application/pgp-signature',
+  // font
+  'font/otf', 'font/ttf', 'font/woff', 'font/woff2',
+  // model
+  'model/gltf-binary', 'model/gltf+json', 'model/stl',
+]);
+
+/** Strip a `; charset=...` parameter so `text/plain;charset=utf-8` matches `text/plain`. */
+function normalizeMime(mime: string): string {
+  return mime.split(';')[0].trim().toLowerCase();
+}
+
+/** `accept=` value for the file input. Covers MOST cases via wildcards plus
+ *  the specific application/font/model entries that don't have a wildcard form. */
+const FILE_INPUT_ACCEPT = [
+  'image/*', 'audio/*', 'video/*', 'text/*',
+  'application/cbor', 'application/json', 'application/pdf',
+  'application/protobuf', 'application/x-bittorrent', 'application/yaml',
+  'application/pgp-signature',
+  'font/otf', 'font/ttf', 'font/woff', 'font/woff2',
+  'model/gltf-binary', 'model/gltf+json', 'model/stl',
+].join(',');
+
 export default function InscriptionSection() {
   const inscriptionFile = useBuilderStore((s) => s.inscriptionFile);
   const setInscriptionFile = useBuilderStore((s) => s.setInscriptionFile);
@@ -24,6 +68,10 @@ export default function InscriptionSection() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
+  /** #2: soft warning when the uploaded file's MIME isn't in ord's renderer
+   *  allowlist. Non-blocking — we still set the inscription (some users want
+   *  raw data on chain), but the user sees a clear note before broadcasting. */
+  const [mimeWarning, setMimeWarning] = useState<string | null>(null);
   const MAX_FILE_SIZE = MAX_INSCRIPTION_SIZE;
 
   // Delegate state
@@ -69,15 +117,24 @@ export default function InscriptionSection() {
   // --- File upload ---
   function readFile(file: File) {
     setFileError(null);
+    setMimeWarning(null);
     if (file.size > MAX_FILE_SIZE) {
       setFileError(`File too large (${(file.size / 1024).toFixed(1)} KB). Maximum is ${MAX_FILE_SIZE / 1024} KB.`);
       return;
     }
     if (file.size === 0) { setFileError('File is empty.'); return; }
+    const contentType = file.type || 'application/octet-stream';
+    // #2: warn if MIME isn't in ord's renderer allowlist — inscription is still
+    // valid on chain, but won't render in explorers. Non-blocking.
+    if (!ORD_SUPPORTED_MIMES.has(normalizeMime(contentType))) {
+      setMimeWarning(
+        `"${contentType}" is not in ord's renderer allowlist. The inscription will exist on-chain but explorers like ord.net / ordiscan won't render the content — they'll show it as "unknown". Proceed only if you intentionally want raw data on chain.`
+      );
+    }
     const reader = new FileReader();
     reader.onload = (e) => {
       const buf = e.target?.result as ArrayBuffer;
-      setInscriptionFile({ contentType: file.type || 'application/octet-stream', body: new Uint8Array(buf) });
+      setInscriptionFile({ contentType, body: new Uint8Array(buf) });
     };
     reader.readAsArrayBuffer(file);
   }
@@ -184,12 +241,35 @@ export default function InscriptionSection() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
                   d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
               </svg>
-              <p className="text-sm text-gray-400">{dragging ? 'Drop file here' : 'Click or drag & drop any file'}</p>
-              <input ref={fileInputRef} type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) readFile(f); }} />
+              <p className="text-sm text-gray-400">
+                {dragging ? 'Drop file here' : 'Click or drag & drop a file'}
+              </p>
+              <p className="text-xs text-gray-600">
+                Renderable in ord/ordiscan: image, audio, video, text, pdf, json, gltf, fonts.
+              </p>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                accept={FILE_INPUT_ACCEPT}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) readFile(f); }}
+              />
             </div>
 
             {fileError && (
               <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">{fileError}</div>
+            )}
+
+            {mimeWarning && (
+              <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-4 py-3 text-xs text-yellow-300">
+                <div className="flex items-start gap-2">
+                  <span>⚠</span>
+                  <div className="flex-1">
+                    <div className="font-semibold text-yellow-200 mb-1">Unsupported MIME type</div>
+                    {mimeWarning}
+                  </div>
+                </div>
+              </div>
             )}
 
             {inscriptionFile && (
