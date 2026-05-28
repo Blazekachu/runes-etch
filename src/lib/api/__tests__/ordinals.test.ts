@@ -128,6 +128,36 @@ describe('getRuneNameStatus (Finding #10 — lag-aware rune lookup)', () => {
   it('throws on invalid rune name format', async () => {
     await expect(getRuneNameStatus('lowercase')).rejects.toThrow(/Invalid rune name/);
   });
+
+  it('returns "unknown" with reason "indexer-wedged" when ord reports unrecoverably_reorged', async () => {
+    installFetchMock({
+      rune: { status: 404 },
+      ordStatus: { status: 200, body: { height: 136721, unrecoverably_reorged: true } },
+      chainTip: { status: 200, body: '136737' },
+    });
+    const s = await getRuneNameStatus('NEVERETCHED');
+    expect(s.state).toBe('unknown');
+    if (s.state === 'unknown') {
+      expect(s.reason).toBe('indexer-wedged');
+      expect(s.indexerHeight).toBe(136721);
+      expect(s.chainHeight).toBe(136737);
+      expect(s.behind).toBe(16);
+    }
+  });
+
+  it('prefers "indexer-wedged" over "indexer-lagging" when both apply', async () => {
+    installFetchMock({
+      rune: { status: 404 },
+      ordStatus: { status: 200, body: { height: 849990, unrecoverably_reorged: true } },
+      chainTip: { status: 200, body: '850000' },
+    });
+    const s = await getRuneNameStatus('NEVERETCHED');
+    expect(s.state).toBe('unknown');
+    if (s.state === 'unknown') {
+      expect(s.reason).toBe('indexer-wedged');
+      expect(s.behind).toBe(10);
+    }
+  });
 });
 
 describe('checkRuneNameAvailable (backwards-compat wrapper)', () => {

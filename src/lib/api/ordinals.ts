@@ -65,7 +65,13 @@ const TXID_RE = /^[0-9a-f]{64}$/i;
 export type RuneNameStatus =
   | { state: 'available' }
   | { state: 'taken'; rune: OrdRuneResponse }
-  | { state: 'unknown'; reason: 'indexer-lagging'; indexerHeight: number; chainHeight: number; behind: number };
+  | {
+      state: 'unknown';
+      reason: 'indexer-lagging' | 'indexer-wedged';
+      indexerHeight: number;
+      chainHeight: number;
+      behind: number;
+    };
 
 /** ord must be within this many blocks of chain tip for a 404 to mean "name is free". */
 const NAME_CHECK_LAG_THRESHOLD = 3;
@@ -113,14 +119,23 @@ export async function getRuneNameStatus(name: string): Promise<RuneNameStatus> {
     throw new Error(`Ord API error on /rune/${encodeURIComponent(name)}: ${runeRes.status}`);
   }
 
-  // 404. Decide whether to trust it by measuring lag.
+  // 404. Decide whether to trust it. Two failure modes can produce a 404:
+  //  - name truly never etched (return 'available')
+  //  - indexer wedged on a reorg, OR indexer lagging — a recent etch we haven't
+  //    indexed yet looks identical to never-etched.
+  // Wedge beats lag — both can be true at once but the wedge is load-bearing.
   if (!ordStatusRes || !ordStatusRes.ok || chainHeight < 0) {
-    // Can't measure — fall back to pre-#10 optimistic behavior.
     return { state: 'available' };
   }
-  const ordStatus = (await ordStatusRes.json()) as { height: number };
+  const ordStatus = (await ordStatusRes.json()) as {
+    height: number;
+    unrecoverably_reorged?: boolean;
+  };
   const indexerHeight = ordStatus.height;
   const behind = Math.max(0, chainHeight - indexerHeight);
+  if (ordStatus.unrecoverably_reorged === true) {
+    return { state: 'unknown', reason: 'indexer-wedged', indexerHeight, chainHeight, behind };
+  }
   if (behind > NAME_CHECK_LAG_THRESHOLD) {
     return { state: 'unknown', reason: 'indexer-lagging', indexerHeight, chainHeight, behind };
   }
