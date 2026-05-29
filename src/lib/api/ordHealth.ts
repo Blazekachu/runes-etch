@@ -1,4 +1,4 @@
-import { getCurrentBlockHeight } from './mempool';
+import { getChainTipForChain } from './mempool';
 import { isOrdinalsTestnet } from './ordinals';
 
 const PUBLIC_ORD_DEFAULT = 'https://ordinals.com';
@@ -62,19 +62,24 @@ export async function getOrdHealth(): Promise<OrdHealthStatus> {
   if (isOrdinalsTestnet() && isPublicOrdForCurrentNetwork()) return { state: 'skipped' };
 
   try {
-    const [statusRes, chainHeight] = await Promise.all([
-      fetchWithTimeout(`${ordBase()}/status`, { headers: { Accept: 'application/json' } }),
-      getCurrentBlockHeight(),
-    ]);
-
+    // Fetch ord /status FIRST so we can read the chain it is actually indexing,
+    // then measure lag against THAT chain's tip. Comparing ord's height against a
+    // tip from a different network (the async-armed MEMPOOL_BASE could still be on
+    // mainnet) produced a bogus `behind` and false "lagging" (Punch List #2).
+    const statusRes = await fetchWithTimeout(`${ordBase()}/status`, {
+      headers: { Accept: 'application/json' },
+    });
     if (!statusRes.ok) return { state: 'unreachable' };
     const data = (await statusRes.json()) as {
       height?: number;
       unrecoverably_reorged?: boolean;
+      chain?: string;
     };
-    if (typeof data.height !== 'number' || typeof chainHeight !== 'number') {
-      return { state: 'unreachable' };
-    }
+    if (typeof data.height !== 'number') return { state: 'unreachable' };
+
+    const chain = data.chain ?? (isOrdinalsTestnet() ? 'testnet4' : 'bitcoin');
+    const chainHeight = await getChainTipForChain(chain);
+    if (typeof chainHeight !== 'number') return { state: 'unreachable' };
     const indexerHeight = data.height;
     const reorged = data.unrecoverably_reorged === true;
     const behind = Math.max(0, chainHeight - indexerHeight);

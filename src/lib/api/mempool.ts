@@ -242,6 +242,31 @@ export async function getCurrentBlockHeight(): Promise<number> {
   return height;
 }
 
+/** mempool.space API base keyed by the bitcoin network name ord reports in its
+ *  /status `chain` field. Unknown chains fall back to mainnet. */
+const MEMPOOL_BASE_BY_CHAIN: Record<string, string> = {
+  bitcoin: MEMPOOL_MAINNET,
+  main: MEMPOOL_MAINNET,
+  mainnet: MEMPOOL_MAINNET,
+  testnet4: MEMPOOL_TESTNET4,
+  testnet: MEMPOOL_TESTNET3,
+  testnet3: MEMPOOL_TESTNET3,
+  signet: 'https://mempool.space/signet/api',
+};
+
+/** Fetch the chain tip height for an EXPLICIT network (by ord's reported `chain`
+ *  name), independent of the session-global MEMPOOL_BASE. Lets callers such as
+ *  the ord health probe measure lag against the SAME chain ord is indexing,
+ *  with no dependency on the async setMempoolNetwork() arming (see Punch List #2). */
+export async function getChainTipForChain(chain: string): Promise<number> {
+  const base = MEMPOOL_BASE_BY_CHAIN[chain] ?? MEMPOOL_MAINNET;
+  const res = await fetchWithTimeout(`${base}/blocks/tip/height`);
+  if (!res.ok) throw new Error(`Failed to fetch block height: ${res.status}`);
+  const height = parseInt(await res.text(), 10);
+  if (isNaN(height) || height < 0) throw new Error('Invalid block height from API');
+  return height;
+}
+
 export async function getTxConfirmations(txid: string): Promise<number> {
   const [txStatus, tipHeight] = await Promise.all([
     getTxStatus(txid),

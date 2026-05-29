@@ -107,6 +107,32 @@ describe('getOrdHealth (#0b — wedged-ord detection)', () => {
     expect(h.state).toBe('unreachable');
   });
 
+  it('measures lag against the tip of ord\'s OWN reported chain, not the stale mempool global (#2)', async () => {
+    // ord reports it is indexing testnet4 at height 136800. The async mempool
+    // network global has NOT been armed (still mainnet). A correct probe must
+    // compare ord against the TESTNET4 tip (136801 -> 1 behind -> healthy),
+    // NOT the mainnet tip (951505 -> ~814k behind -> false "lagging").
+    global.fetch = vi.fn(async (url: string | URL) => {
+      const u = url.toString();
+      if (u.endsWith('/status')) {
+        return new Response(
+          JSON.stringify({ height: 136800, unrecoverably_reorged: false, chain: 'testnet4' }),
+          { status: 200 },
+        );
+      }
+      if (u.includes('/testnet4/api/blocks/tip/height')) return new Response('136801', { status: 200 });
+      if (u.includes('mempool.space/api/blocks/tip/height')) return new Response('951505', { status: 200 });
+      throw new Error(`Unmocked fetch: ${u}`);
+    }) as unknown as typeof fetch;
+
+    const h = await getOrdHealth();
+    expect(h.state).toBe('healthy');
+    if (h.state === 'healthy') {
+      expect(h.indexerHeight).toBe(136800);
+      expect(h.chainHeight).toBe(136801);
+    }
+  });
+
   it('returns "skipped" on testnet with public ord (mainnet-only indexer)', async () => {
     setOrdinalsTestnet('tb1qxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx');
     // No mock installed — call should short-circuit before any fetch.
