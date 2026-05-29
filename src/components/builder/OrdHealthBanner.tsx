@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { getOrdHealth, type OrdHealthStatus } from '@/lib/api/ordHealth';
+import { isOrdinalsTestnet } from '@/lib/api/ordinals';
 
 const POLL_INTERVAL_MS = 30_000;
 
@@ -57,11 +58,14 @@ export default function OrdHealthBanner() {
           <div>
             <p className="font-semibold">Ord indexer wedged on a reorg.</p>
             <p className="text-xs text-red-300/80 mt-0.5">
-              Indexer at block {health.indexerHeight.toLocaleString()}, chain tip at{' '}
-              {health.chainHeight.toLocaleString()} ({health.behind} blocks behind).
-              Rune-name uniqueness and minimum checks are stale until ord recovers.
-              Verify names out-of-band via mempool.space, ordiscan, or ord.net before
-              broadcasting.
+              ord halted on a chain reorg it can&apos;t unwind (indexer at block{' '}
+              {health.indexerHeight.toLocaleString()}, chain tip{' '}
+              {health.chainHeight.toLocaleString()}). The block gap isn&apos;t the issue —
+              the index is internally stale until ord recovers, so rune-name uniqueness
+              and minimum checks can&apos;t be trusted.{' '}
+              {isOrdinalsTestnet()
+                ? 'There is no public testnet4 indexer to fall back on — wait for the local ord to recover before trusting name checks or broadcasting.'
+                : 'Verify names out-of-band via mempool.space, ordiscan, or ord.net before broadcasting.'}
             </p>
           </div>
         </div>
@@ -75,9 +79,10 @@ export default function OrdHealthBanner() {
       <div className="max-w-3xl mx-auto flex items-start gap-2 text-yellow-200">
         <span aria-hidden>⏳</span>
         <div className="text-xs">
-          Ord indexer is {health.behind} blocks behind chain tip (at{' '}
-          {health.indexerHeight.toLocaleString()}, tip {health.chainHeight.toLocaleString()}).
-          Name check will refuse to confirm recent etches until ord catches up.
+          Ord indexer is {health.behind} block{health.behind === 1 ? '' : 's'} behind chain
+          tip (at {health.indexerHeight.toLocaleString()}, tip{' '}
+          {health.chainHeight.toLocaleString()}). Name check will refuse to confirm recent
+          etches until ord catches up.
         </div>
       </div>
     </div>
