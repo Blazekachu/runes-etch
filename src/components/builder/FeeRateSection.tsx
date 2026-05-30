@@ -13,7 +13,6 @@ export default function FeeRateSection() {
   const setSelectedFeeRate = useBuilderStore((s) => s.setSelectedFeeRate);
   const selectedRevealFeeRate = useBuilderStore((s) => s.selectedRevealFeeRate);
   const setSelectedRevealFeeRate = useBuilderStore((s) => s.setSelectedRevealFeeRate);
-  const detectedMode = useBuilderStore((s) => s.detectedMode);
   const wallet = useBuilderStore((s) => s.wallet);
 
   const [commitCustom, setCommitCustom] = useState('');
@@ -23,8 +22,6 @@ export default function FeeRateSection() {
   const [revealMode, setRevealMode] = useState<FeeMode | 'match'>('match');
   const [loadingFees, setLoadingFees] = useState(false);
   const [feeError, setFeeError] = useState<string | null>(null);
-
-  const isQuick = detectedMode === 'quick';
 
   // Defer fee fetch until wallet is connected — otherwise the module-level
   // MEMPOOL_BASE in mempool.ts is still mainnet (the default) and we'd fetch
@@ -77,20 +74,16 @@ export default function FeeRateSection() {
   }
 
   const effectiveReveal = selectedRevealFeeRate ?? selectedFeeRate;
-  const badge = isQuick
-    ? `${selectedFeeRate} sat/vB`
-    : selectedRevealFeeRate && selectedRevealFeeRate !== selectedFeeRate
-      ? `commit ${selectedFeeRate} · reveal ≤${selectedRevealFeeRate} sat/vB`
-      : `${selectedFeeRate} sat/vB`;
+  const badge = selectedRevealFeeRate && selectedRevealFeeRate !== selectedFeeRate
+    ? `commit ${selectedFeeRate} · reveal ≤${selectedRevealFeeRate} sat/vB`
+    : `${selectedFeeRate} sat/vB`;
 
   return (
     <SectionWrapper sectionKey="fee-rate" title="Fee Rates" badge={badge}>
       <div className="flex flex-col gap-6">
         <div className="flex items-center justify-between">
           <p className="text-xs text-gray-500">
-            {isQuick
-              ? 'Single-TX etch — one fee rate.'
-              : 'Commit and reveal can use different rates. Reveal budget pre-funds commit.vout[0] for the max reveal rate.'}
+            Commit and reveal can use different rates. Reveal budget pre-funds commit.vout[0] for the max reveal rate.
           </p>
           <button
             onClick={loadFees}
@@ -142,11 +135,11 @@ export default function FeeRateSection() {
           </div>
         )}
 
-        {/* --- Commit (or single TX in quick mode) --- */}
+        {/* --- Commit fee rate --- */}
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-gray-300">
-              {isQuick ? 'Fee rate' : 'Commit fee rate'}
+              Commit fee rate
             </span>
             <span className="font-mono text-xs text-orange-400">{selectedFeeRate} sat/vB</span>
           </div>
@@ -180,8 +173,8 @@ export default function FeeRateSection() {
           </div>
         </div>
 
-        {/* --- Reveal budget (commit-reveal modes only) --- */}
-        {!isQuick && (
+        {/* --- Reveal budget --- */}
+        {(
           <div className="flex flex-col gap-2 border-t border-gray-800 pt-4">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-gray-300">Reveal fee budget (max)</span>

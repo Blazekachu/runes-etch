@@ -1,6 +1,6 @@
 // --- Etching Modes ---
 
-export type EtchMode = 'full' | 'no-parent' | 'no-inscription' | 'quick';
+export type EtchMode = 'full' | 'no-parent' | 'no-inscription';
 
 // --- Builder v2 Phase ---
 
@@ -108,8 +108,7 @@ export type WizardStep =
   | 'vanity-fees'
   | 'review'
   | 'waiting'
-  | 'reveal'
-  | 'quick-review';
+  | 'reveal';
 
 export interface CommitTxState {
   txid: string;

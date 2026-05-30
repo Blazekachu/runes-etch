@@ -49,12 +49,8 @@ export default function UtxoSelector({ onNext, onBack }: { onNext?: () => void; 
   const hasInscription = etchMode === 'full' || etchMode === 'no-parent';
   const hasParent = !!parentInscription;
   const contentSize = inscriptionFile?.body.length ?? 0;
-  const isQuick = etchMode === 'quick';
-
   // Estimated cost in sats
-  const estCost = isQuick
-    ? Math.ceil((10.5 + 68 + 3 * 43 + 50) * selectedFeeRate) + 546 // quick: fee + dust for premine
-    : estimateCost(selectedFeeRate, hasInscription || !!delegateInscriptionId, hasParent, contentSize);
+  const estCost = estimateCost(selectedFeeRate, hasInscription || !!delegateInscriptionId, hasParent, contentSize);
 
   useEffect(() => {
     if (!wallet.taprootAddress) return;
@@ -266,7 +262,7 @@ export default function UtxoSelector({ onNext, onBack }: { onNext?: () => void; 
           </div>
         )}
         <p className="text-xs text-gray-600">
-          Includes {isQuick ? 'TX fee + dust' : 'commit fee + reveal fee + dust outputs'}. Actual cost may vary slightly.
+          Includes commit fee + reveal fee + dust outputs. Actual cost may vary slightly.
         </p>
       </div>
 

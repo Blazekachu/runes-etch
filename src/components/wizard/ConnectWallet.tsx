@@ -23,12 +23,6 @@ const MODES: { key: EtchMode; title: string; desc: string; badge?: string }[] = 
     title: 'No Inscription',
     desc: 'Pure rune etch with no inscription data. Commit-reveal protected.',
   },
-  {
-    key: 'quick',
-    title: 'Quick Etch',
-    desc: 'Single transaction, no commit-reveal. Name visible in mempool.',
-    badge: 'No front-run protection',
-  },
 ];
 
 export default function ConnectWallet({ onNext }: { onNext?: () => void; onBack?: () => void }) {

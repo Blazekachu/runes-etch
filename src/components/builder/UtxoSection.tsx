@@ -5,10 +5,10 @@ import { useBuilderStore } from '@/store/builderStore';
 import { fetchUtxos, setMempoolNetwork } from '@/lib/api/mempool';
 import { fetchUtxoSatInfo, isOrdinalsTestnet, setOrdinalsTestnet } from '@/lib/api/ordinals';
 import {
-  estimateQuickEtchVBytes,
+  estimateTxVBytes,
   type EstimatorInput,
   type EstimatorOutput,
-} from '@/lib/runes/quickEtch';
+} from '@/lib/runes/txSize';
 import type { LabeledUtxo, SatRarity } from '@/types';
 import SectionWrapper from './SectionWrapper';
 
@@ -18,10 +18,10 @@ import SectionWrapper from './SectionWrapper';
  *  commitFeeRate. Caller should pass revealFeeRate = commitFeeRate when the user
  *  picks "match commit" (i.e. selectedRevealFeeRate is null).
  *
- *  #9: per-type sizing via the same `estimateQuickEtchVBytes` we calibrated for
- *  Finding #1 (the BUDDY etch overshoot). Previously this function hand-rolled
- *  `outputs * 43` (assuming every output is P2TR) and added a stray `+ 50`
- *  buffer — same anti-pattern Finding #1 killed in quickEtch.ts. On mainnet
+ *  #9: per-type sizing via the same `estimateTxVBytes` (lib/runes/txSize.ts) we
+ *  calibrated for Finding #1 (the BUDDY etch overshoot). Previously this function
+ *  hand-rolled `outputs * 43` (assuming every output is P2TR) and added a stray
+ *  `+ 50` buffer — same anti-pattern Finding #1 killed. On mainnet
  *  at 200 sat/vB that overcounted reveal vsize by ~12 vB × outputs (~2.4k sats
  *  wasted on the commit's pre-funded reveal budget) and the commit TX by ~12
  *  vB (~2.4k sats overpaid). */
@@ -49,7 +49,7 @@ function estimateCost(
   revealOutputs.push({ type: 'op_return', scriptByteLen: 25 });
   revealOutputs.push({ type: 'p2wpkh' });
 
-  const baseRevealVB = estimateQuickEtchVBytes(revealInputs, revealOutputs);
+  const baseRevealVB = estimateTxVBytes(revealInputs, revealOutputs);
   const witnessContentVB = hasInscription ? Math.ceil(contentSize / 4) : 0;
   const revealVB = baseRevealVB + witnessContentVB;
   const revealFee = Math.ceil(revealVB * revealFeeRate);
@@ -61,7 +61,7 @@ function estimateCost(
   // ---- Commit TX ----
   // Inputs: 1 p2wpkh (payment funding). Outputs: 1 p2tr (commit address) +
   // 1 p2wpkh (change to payment per #12).
-  const commitVB = estimateQuickEtchVBytes(
+  const commitVB = estimateTxVBytes(
     [{ type: 'p2wpkh' }],
     [{ type: 'p2tr' }, { type: 'p2wpkh' }],
   );
@@ -89,7 +89,6 @@ export default function UtxoSection() {
   const setUtxos = useBuilderStore((s) => s.setUtxos);
   const toggleUtxoSelection = useBuilderStore((s) => s.toggleUtxoSelection);
   const parentInscription = useBuilderStore((s) => s.parentInscription);
-  const detectedMode = useBuilderStore((s) => s.detectedMode);
   const inscriptionFile = useBuilderStore((s) => s.inscriptionFile);
   const delegateInscriptionId = useBuilderStore((s) => s.delegateInscriptionId);
   const selectedFeeRate = useBuilderStore((s) => s.selectedFeeRate);
@@ -108,33 +107,21 @@ export default function UtxoSection() {
   const [error, setError] = useState<string | null>(null);
   const autoSelectedRef = useRef(false);
 
-  const isQuick = detectedMode === 'quick';
-  const hasInscription = detectedMode === 'commit-reveal';
+  const hasInscription = !!inscriptionFile || !!delegateInscriptionId;
   const hasParent = !!parentInscription;
   const contentSize = inscriptionFile?.body.length ?? 0;
 
-  // Estimated cost in sats. In commit-reveal mode, commit.vout[0] is sized by
-  // selectedRevealFeeRate (the reveal budget) so the user pre-funds reveal at
-  // up to that rate. When null, builder falls back to commit rate.
+  // Estimated cost in sats. commit.vout[0] is sized by selectedRevealFeeRate
+  // (the reveal budget) so the user pre-funds reveal at up to that rate.
+  // When null, the builder falls back to the commit rate.
   const effectiveRevealRate = selectedRevealFeeRate ?? selectedFeeRate;
-  // Preview-time worst-case for quick mode: 1 p2wpkh input (fee inputs come from
-  // payment), p2tr dust receiver, OP_RETURN runestone (~30 B typical), p2wpkh
-  // change. Matches the per-type estimator in quickEtch.ts so the preview value
-  // is consistent with the fee the user actually pays.
-  const estCost = isQuick
-    ? Math.ceil(
-        estimateQuickEtchVBytes(
-          [{ type: 'p2wpkh' }],
-          [{ type: 'p2tr' }, { type: 'op_return', scriptByteLen: 30 }, { type: 'p2wpkh' }],
-        ) * selectedFeeRate,
-      ) + 546
-    : estimateCost(
-        selectedFeeRate,
-        effectiveRevealRate,
-        hasInscription || !!delegateInscriptionId,
-        hasParent,
-        contentSize,
-      );
+  const estCost = estimateCost(
+    selectedFeeRate,
+    effectiveRevealRate,
+    hasInscription,
+    hasParent,
+    contentSize,
+  );
 
   const selectedList = utxos.filter((u) => u.selected);
   const totalSats = selectedList.reduce((acc, u) => acc + u.value, 0);
@@ -467,7 +454,7 @@ export default function UtxoSection() {
             </div>
           )}
           <p className="text-xs text-gray-600">
-            Includes {isQuick ? 'TX fee + dust' : 'commit fee + reveal fee + dust outputs'}. Actual cost may vary slightly.
+            Includes commit fee + reveal fee + dust outputs. Actual cost may vary slightly.
           </p>
         </div>
 

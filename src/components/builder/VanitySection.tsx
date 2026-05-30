@@ -108,28 +108,18 @@ function VanityPanel({ label, helpText, config, onChange }: VanityPanelProps) {
 }
 
 export default function VanitySection() {
-  const vanityConfig = useBuilderStore((s) => s.vanityConfig);
-  const setVanityConfig = useBuilderStore((s) => s.setVanityConfig);
   const commitVanityConfig = useBuilderStore((s) => s.commitVanityConfig);
   const setCommitVanityConfig = useBuilderStore((s) => s.setCommitVanityConfig);
-  const detectedMode = useBuilderStore((s) => s.detectedMode);
 
-  const isQuick = detectedMode === 'quick';
+  // This section surfaces only COMMIT vanity — reveal vanity is set in WaitingPhase,
+  // the phase where it actually applies. Reveal vanity is purely post-commit data
+  // (varies the reveal TX nLockTime, signed only after commit confirms); the bundle
+  // doesn't carry it, so pre-commit entry would silently vanish on bundle-import.
+  const commitActive = commitVanityConfig.prefix.length + commitVanityConfig.suffix.length > 0;
 
-  // In commit-reveal mode this section only surfaces commit vanity — reveal vanity
-  // is set in WaitingPhase, the phase where it actually applies. Reasoning: reveal
-  // vanity is purely post-commit data (varies reveal TX nLockTime, signed only after
-  // commit confirms). The bundle doesn't carry it, so pre-commit entry would silently
-  // vanish on bundle-import to another device. Keep input adjacent to action.
-  const quickActive = isQuick && vanityConfig.prefix.length + vanityConfig.suffix.length > 0;
-  const commitActive = !isQuick && commitVanityConfig.prefix.length + commitVanityConfig.suffix.length > 0;
-
-  let badge: string | undefined;
-  if (quickActive) {
-    badge = `${vanityConfig.prefix}…${vanityConfig.suffix}`;
-  } else if (commitActive) {
-    badge = `commit: ${commitVanityConfig.prefix || ''}…${commitVanityConfig.suffix || ''}`;
-  }
+  const badge: string | undefined = commitActive
+    ? `commit: ${commitVanityConfig.prefix || ''}…${commitVanityConfig.suffix || ''}`
+    : undefined;
 
   return (
     <SectionWrapper sectionKey="vanity" title="Vanity TXID" badge={badge}>
@@ -137,27 +127,16 @@ export default function VanitySection() {
         <p className="text-xs text-gray-500">
           Allowed: <span className="font-mono text-gray-400">0-9 a-f</span> (hex). Max{' '}
           <span className="text-gray-400">{MAX_VANITY_TOTAL}</span> chars (prefix + suffix). Grinder
-          varies the 4-byte nLockTime in a Web Worker before signing.
-          {!isQuick && (
-            <> Reveal-TXID vanity is configured later in the Waiting phase — that's when it grinds.</>
-          )}
+          varies the 4-byte nLockTime in a Web Worker before signing.{' '}
+          Reveal-TXID vanity is configured later in the Waiting phase — that's when it grinds.
         </p>
 
-        {isQuick ? (
-          <VanityPanel
-            label="TXID vanity"
-            helpText="Quick etch is a single TX — this is the TXID that gets grinded before broadcast."
-            config={vanityConfig}
-            onChange={setVanityConfig}
-          />
-        ) : (
-          <VanityPanel
-            label="Commit TXID vanity"
-            helpText="Grinds the commit TXID before signing. Runs locally in your browser; the commit broadcast waits for the match."
-            config={commitVanityConfig}
-            onChange={setCommitVanityConfig}
-          />
-        )}
+        <VanityPanel
+          label="Commit TXID vanity"
+          helpText="Grinds the commit TXID before signing. Runs locally in your browser; the commit broadcast waits for the match."
+          config={commitVanityConfig}
+          onChange={setCommitVanityConfig}
+        />
       </div>
     </SectionWrapper>
   );

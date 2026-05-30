@@ -14,13 +14,11 @@ const ORDINALS_URL = 'https://ordinals.com/inscription';
 export default function CompletePhase() {
   const etching = useBuilderStore((s) => s.etching);
   const revealTxid = useBuilderStore((s) => s.revealTxid);
-  const quickTxid = useBuilderStore((s) => s.quickTxid);
   const commitState = useBuilderStore((s) => s.commitState);
   const wallet = useBuilderStore((s) => s.wallet);
   const reset = useBuilderStore((s) => s.reset);
 
-  const txid = revealTxid || quickTxid || '';
-  const isQuick = !!quickTxid && !revealTxid;
+  const txid = revealTxid || '';
   const MEMPOOL_TX_URL = mempoolTxUrl(wallet.taprootAddress || wallet.paymentAddress);
 
   return (
@@ -34,9 +32,7 @@ export default function CompletePhase() {
       <div>
         <h2 className="text-2xl font-bold text-white mb-2">Rune Etched!</h2>
         <p className="text-gray-400 text-sm">
-          {isQuick
-            ? 'Your rune has been etched in a single transaction.'
-            : 'Your rune has been etched on Bitcoin. It may take a moment to appear on explorers.'}
+          Your rune has been etched on Bitcoin. It may take a moment to appear on explorers.
         </p>
       </div>
 
@@ -46,11 +42,11 @@ export default function CompletePhase() {
       </div>
 
       <div className="w-full rounded-lg border border-gray-800 bg-gray-900 px-4 py-3">
-        <p className="text-xs text-gray-500 mb-1">{isQuick ? 'TXID' : 'Reveal TXID'}</p>
+        <p className="text-xs text-gray-500 mb-1">Reveal TXID</p>
         <p className="font-mono text-xs text-white break-all">{txid}</p>
       </div>
 
-      {commitState && !isQuick && (
+      {commitState && (
         <div className="w-full rounded-lg border border-gray-800 bg-gray-900 px-4 py-3">
           <p className="text-xs text-gray-500 mb-1">Commit TXID</p>
           <p className="font-mono text-xs text-gray-400 break-all">{commitState.txid}</p>
@@ -62,12 +58,10 @@ export default function CompletePhase() {
           className="flex-1 rounded-lg border border-gray-700 px-4 py-2.5 text-sm font-semibold text-gray-300 hover:border-orange-500 hover:text-orange-400 transition-colors text-center">
           mempool.space
         </a>
-        {!isQuick && (
-          <a href={`${ORDINALS_URL}/${txid}i0`} target="_blank" rel="noopener noreferrer"
-            className="flex-1 rounded-lg border border-gray-700 px-4 py-2.5 text-sm font-semibold text-gray-300 hover:border-orange-500 hover:text-orange-400 transition-colors text-center">
-            ordinals.com
-          </a>
-        )}
+        <a href={`${ORDINALS_URL}/${txid}i0`} target="_blank" rel="noopener noreferrer"
+          className="flex-1 rounded-lg border border-gray-700 px-4 py-2.5 text-sm font-semibold text-gray-300 hover:border-orange-500 hover:text-orange-400 transition-colors text-center">
+          ordinals.com
+        </a>
       </div>
 
       <button onClick={reset}

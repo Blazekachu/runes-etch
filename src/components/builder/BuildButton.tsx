@@ -4,10 +4,9 @@ import { useRef, useState, useEffect } from 'react';
 import * as bitcoin from 'bitcoinjs-lib';
 import { useBuilderStore } from '@/store/builderStore';
 import { buildCommitTx } from '@/lib/runes/commit';
-import { buildQuickEtchTx } from '@/lib/runes/quickEtch';
 import { serializeForTxid } from '@/lib/runes/reveal';
 import { signPsbt } from '@/lib/wallet/xverse';
-import { broadcastTx, bitcoinNetworkForAddress, getCurrentBlockHeight } from '@/lib/api/mempool';
+import { broadcastTx, bitcoinNetworkForAddress } from '@/lib/api/mempool';
 import { getRuneNameStatus } from '@/lib/api/ordinals';
 import { VanityGrinder } from '@/lib/vanity/grinder';
 
@@ -19,27 +18,21 @@ export default function BuildButton() {
   const parentInscription = useBuilderStore((s) => s.parentInscription);
   const selectedFeeRate = useBuilderStore((s) => s.selectedFeeRate);
   const selectedRevealFeeRate = useBuilderStore((s) => s.selectedRevealFeeRate);
-  const vanityConfig = useBuilderStore((s) => s.vanityConfig);
-  const vanityProgress = useBuilderStore((s) => s.vanityProgress);
-  const setVanityProgress = useBuilderStore((s) => s.setVanityProgress);
   const commitVanityConfig = useBuilderStore((s) => s.commitVanityConfig);
   const commitVanityProgress = useBuilderStore((s) => s.commitVanityProgress);
   const setCommitVanityProgress = useBuilderStore((s) => s.setCommitVanityProgress);
   const commitVanityLocktime = useBuilderStore((s) => s.commitVanityLocktime);
   const setCommitVanityLocktime = useBuilderStore((s) => s.setCommitVanityLocktime);
-  const detectedMode = useBuilderStore((s) => s.detectedMode);
   const phase = useBuilderStore((s) => s.phase);
   const setPhase = useBuilderStore((s) => s.setPhase);
   const setCommitState = useBuilderStore((s) => s.setCommitState);
   const setCachedTapscript = useBuilderStore((s) => s.setCachedTapscript);
-  const setQuickTxid = useBuilderStore((s) => s.setQuickTxid);
   const orderedFundingUtxos = useBuilderStore((s) => s.orderedFundingUtxos);
   const getChangeAddress = useBuilderStore((s) => s.changeAddress);
   const commitState = useBuilderStore((s) => s.commitState);
   const reinscribeMode = useBuilderStore((s) => s.reinscribeMode);
   const targetUtxo = useBuilderStore((s) => s.targetUtxo);
   const targetVerifyState = useBuilderStore((s) => s.targetVerifyState);
-  const runeMinimum = useBuilderStore((s) => s.runeMinimum);
 
   const [loading, setLoading] = useState(false);
   const [grinding, setGrinding] = useState(false);
@@ -58,11 +51,9 @@ export default function BuildButton() {
   // Only visible during building phase
   if (phase !== 'building') return null;
 
-  // Use the ordered list — primary UTXO is first, so it becomes vin 0 of commit/quick TX.
+  // Use the ordered list — primary UTXO is first, so it becomes vin 0 of the commit TX.
   // Inscription lands on the first sat of vin 0, so primary controls the rune/inscription's sat.
   const selected = orderedFundingUtxos();
-  const hasVanity = vanityConfig.prefix.length > 0 || vanityConfig.suffix.length > 0;
-  const isQuick = detectedMode === 'quick';
 
   // In reinscribe mode, the first input (primary, vin 0) MUST be an inscription UTXO so the
   // existing inscription's sat is the one carried into the commit output at offset 0.
@@ -122,120 +113,6 @@ export default function BuildButton() {
       ];
     }
     return picker;
-  }
-
-  async function signAndBroadcastPsbt(psbt: bitcoin.Psbt, fee: number): Promise<string> {
-    // Use the same input list the PSBT was built with so dust + sign-indices match
-    // when a target UTXO is prepended as vin[0].
-    const fundingInputs = buildFundingUtxos();
-
-    // Dust change check
-    const totalIn = fundingInputs.reduce((acc, u) => acc + BigInt(u.value), 0n);
-    const changeValue = totalIn - BigInt(fee);
-    if (changeValue > 0n && changeValue < 546n && dustConfirm !== Number(changeValue)) {
-      setDustConfirm(Number(changeValue));
-      setLoading(false);
-      // Throw to interrupt; user must accept dust then re-click
-      throw new DustConfirmNeeded();
-    }
-
-    const psbtBase64 = psbt.toBase64();
-    const inputsToSign = fundingInputs.map((u, i) => ({
-      index: i,
-      address: u.address,
-    }));
-
-    const signedBase64 = await signPsbt(psbtBase64, inputsToSign);
-    const signedPsbt = bitcoin.Psbt.fromBase64(signedBase64);
-    signedPsbt.finalizeAllInputs();
-    const finalTx = signedPsbt.extractTransaction();
-    const txHex = finalTx.toHex();
-    const txid = finalTx.getId();
-
-    await broadcastTx(txHex);
-    return txid;
-  }
-
-  // --- Quick Etch Flow ---
-  async function handleQuickEtch() {
-    const internalPubkey = deriveInternalPubkey();
-    const fundingUtxos = buildFundingUtxos();
-    const currentBlockHeight = await getCurrentBlockHeight();
-    const btcNetwork = bitcoinNetworkForAddress(wallet.taprootAddress);
-    const isTestnet = wallet.taprootAddress.startsWith('tb1');
-
-    // If vanity is configured, grind for a matching nLockTime
-    if (hasVanity) {
-      setGrinding(true);
-      broadcastingRef.current = false;
-      setLoading(false);
-
-      // Build template TX with locktime=0 to get serialization
-      const templateResult = buildQuickEtchTx({
-        etching, fundingUtxos, feeRate: selectedFeeRate,
-        receiverAddress: wallet.taprootAddress, changeAddress: getChangeAddress(),
-        internalPubkey, vanityNonce: new Uint8Array(0), currentBlockHeight, isTestnet,
-        network: btcNetwork,
-        runeMinimum,
-      });
-      const template = serializeForTxid(templateResult.psbt);
-
-      const grinder = new VanityGrinder();
-      grinderRef.current = grinder;
-
-      grinder.start({
-        txTemplate: template,
-        nonceOffset: template.length - 4, // nLockTime = last 4 bytes
-        nonceLength: 4,
-        config: vanityConfig,
-        onProgress: (progress) => setVanityProgress(progress),
-        onFound: async (nonce) => {
-          grinderRef.current = null;
-          setGrinding(false);
-          setLoading(true);
-          broadcastingRef.current = true;
-
-          try {
-            const dv = new DataView(nonce.buffer, nonce.byteOffset, nonce.byteLength);
-            const foundLocktime = dv.getUint32(0, true);
-
-            // Rebuild TX with the winning locktime
-            const finalResult = buildQuickEtchTx({
-              etching, fundingUtxos, feeRate: selectedFeeRate,
-              receiverAddress: wallet.taprootAddress, changeAddress: getChangeAddress(),
-              internalPubkey, vanityNonce: new Uint8Array(0), currentBlockHeight, isTestnet,
-              locktime: foundLocktime, network: btcNetwork,
-              runeMinimum,
-            });
-
-            const txid = await signAndBroadcastPsbt(finalResult.psbt, finalResult.fee);
-            setQuickTxid(txid);
-            setPhase('complete');
-          } catch (err) {
-            if (!(err instanceof DustConfirmNeeded)) {
-              setError(err instanceof Error ? err.message : 'An unknown error occurred.');
-            }
-          } finally {
-            broadcastingRef.current = false;
-            setLoading(false);
-          }
-        },
-      });
-      return;
-    }
-
-    // No vanity -- build and broadcast directly
-    const result = buildQuickEtchTx({
-      etching, fundingUtxos, feeRate: selectedFeeRate,
-      receiverAddress: wallet.taprootAddress, changeAddress: getChangeAddress(),
-      internalPubkey, vanityNonce: new Uint8Array(0), currentBlockHeight, isTestnet,
-      network: btcNetwork,
-      runeMinimum,
-    });
-
-    const txid = await signAndBroadcastPsbt(result.psbt, result.fee);
-    setQuickTxid(txid);
-    setPhase('complete');
   }
 
   // Shared finalize path: takes a built CommitTxResult + locktime context, signs,
@@ -317,7 +194,7 @@ export default function BuildButton() {
     }
 
     // Commit vanity → grind nLockTime first, then rebuild with the winning value
-    // and sign. Same pattern as quick-mode vanity (handleQuickEtch).
+    // and sign. Same grind-then-sign pattern as the no-vanity path above.
     setGrinding(true);
     broadcastingRef.current = false;
     setLoading(false);
@@ -390,11 +267,7 @@ export default function BuildButton() {
         );
       }
 
-      if (isQuick) {
-        await handleQuickEtch();
-      } else {
-        await handleCommitReveal();
-      }
+      await handleCommitReveal();
     } catch (err) {
       if (!(err instanceof DustConfirmNeeded)) {
         setError(err instanceof Error ? err.message : 'An unknown error occurred.');
@@ -409,21 +282,14 @@ export default function BuildButton() {
     grinderRef.current?.stop();
     grinderRef.current = null;
     setGrinding(false);
-    // Reset whichever progress source was driving this grind.
-    if (isQuick) {
-      setVanityProgress({ attempts: 0, speed: 0, bestMatch: '', found: false, nonce: null });
-    } else {
-      setCommitVanityProgress({ attempts: 0, speed: 0, bestMatch: '', found: false, nonce: null });
-    }
+    setCommitVanityProgress({ attempts: 0, speed: 0, bestMatch: '', found: false, nonce: null });
   }
 
   const buttonLabel = grinding
     ? 'Grinding...'
     : loading
       ? 'Broadcasting...'
-      : isQuick
-        ? 'Quick Etch'
-        : 'Commit & Sign';
+      : 'Commit & Sign';
 
   return (
     <div className="flex flex-col gap-3 w-full">
@@ -450,18 +316,13 @@ export default function BuildButton() {
         </div>
       )}
 
-      {/* Vanity grinding status — sourced from quick-vanity (isQuick mode) or
-          commit-vanity (commit-reveal mode), whichever is active. */}
-      {grinding && (() => {
-        const activeConfig = isQuick ? vanityConfig : commitVanityConfig;
-        const activeProgress = isQuick ? vanityProgress : commitVanityProgress;
-        const label = isQuick ? 'Grinding vanity TXID...' : 'Grinding commit TXID...';
-        return (
+      {/* Commit-TXID vanity grinding status */}
+      {grinding && (
         <div className="flex flex-col gap-3 rounded-lg border border-gray-800 bg-gray-900 p-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="inline-block w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
-              <p className="text-sm font-medium text-gray-300">{label}</p>
+              <p className="text-sm font-medium text-gray-300">Grinding commit TXID...</p>
             </div>
             <button
               onClick={handleCancelGrind}
@@ -474,25 +335,24 @@ export default function BuildButton() {
             <div className="flex justify-between">
               <span className="text-gray-500">Target</span>
               <span className="text-orange-400">
-                {activeConfig.prefix && `prefix: ${activeConfig.prefix}`}
-                {activeConfig.prefix && activeConfig.suffix && ' | '}
-                {activeConfig.suffix && `suffix: ${activeConfig.suffix}`}
+                {commitVanityConfig.prefix && `prefix: ${commitVanityConfig.prefix}`}
+                {commitVanityConfig.prefix && commitVanityConfig.suffix && ' | '}
+                {commitVanityConfig.suffix && `suffix: ${commitVanityConfig.suffix}`}
               </span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-500">Attempts</span>
-              <span className="text-gray-300">{activeProgress.attempts.toLocaleString()}</span>
+              <span className="text-gray-300">{commitVanityProgress.attempts.toLocaleString()}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-500">Speed</span>
               <span className="text-gray-300">
-                {activeProgress.speed > 0 ? `${activeProgress.speed.toLocaleString()} h/s` : '--'}
+                {commitVanityProgress.speed > 0 ? `${commitVanityProgress.speed.toLocaleString()} h/s` : '--'}
               </span>
             </div>
           </div>
         </div>
-        );
-      })()}
+      )}
 
       {/* Error display */}
       {error && (

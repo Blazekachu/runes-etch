@@ -7,7 +7,6 @@ export default function TxPreview() {
   const inscriptionFile = useBuilderStore((s) => s.inscriptionFile);
   const delegateInscriptionId = useBuilderStore((s) => s.delegateInscriptionId);
   const parentInscription = useBuilderStore((s) => s.parentInscription);
-  const detectedMode = useBuilderStore((s) => s.detectedMode);
   const detectedReason = useBuilderStore((s) => s.detectedReason);
   const selectedUtxos = useBuilderStore((s) => s.selectedUtxos);
   const selectedFeeRate = useBuilderStore((s) => s.selectedFeeRate);
@@ -33,12 +32,8 @@ export default function TxPreview() {
     <div className="rounded-lg border border-gray-800 bg-gray-900 p-4 flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium text-gray-300">TX Preview</p>
-        <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
-          detectedMode === 'quick'
-            ? 'bg-green-500/20 text-green-400'
-            : 'bg-orange-500/20 text-orange-400'
-        }`}>
-          {detectedMode === 'quick' ? 'Quick Etch' : 'Commit-Reveal'}
+        <span className="text-xs font-semibold px-2 py-0.5 rounded bg-orange-500/20 text-orange-400">
+          Commit-Reveal
         </span>
       </div>
       <p className="text-xs text-gray-500">{detectedReason}</p>

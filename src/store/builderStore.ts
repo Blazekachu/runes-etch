@@ -69,21 +69,21 @@ function reviver(_key: string, value: unknown): unknown {
 // --- Auto-detection: pure function, NOT in the store ---
 
 export interface DetectedMode {
-  mode: 'quick' | 'commit-reveal';
+  mode: 'commit-reveal';
   reason: string;
 }
 
+/**
+ * Every rune etch is commit-reveal. Etching a NAMED rune requires committing to
+ * the name in a tapscript of an input that is >= 6 blocks old, which is inherently
+ * a two-transaction commit-reveal — a single-TX "quick" etch cannot satisfy it and
+ * would confirm but etch nothing (Punch List #6). The only thing that varies is the
+ * reason shown to the user.
+ */
 export function detectEtchMode(params: {
   inscriptionFile: InscriptionFile | null;
   delegateInscriptionId: string | null;
   parentInscription: ParentInscription | null;
-  runeName: string;
-  currentBlockHeight: number;
-  isTestnet: boolean;
-  /** Authoritative chain rune-name minimum (e.g. from ord). When set, used regardless
-   *  of network. Without it, mainnet falls back to local `minimumAtHeight()` and
-   *  testnet is permissive (legacy behavior — Finding #11). */
-  runeMinimum: bigint | null;
 }): DetectedMode {
   if (params.inscriptionFile || params.delegateInscriptionId) {
     return { mode: 'commit-reveal', reason: 'Inscription requires commit-reveal' };
@@ -91,23 +91,7 @@ export function detectEtchMode(params: {
   if (params.parentInscription) {
     return { mode: 'commit-reveal', reason: 'Parent linkage requires commit-reveal' };
   }
-  if (params.runeName) {
-    let minValue: bigint | null = null;
-    if (params.runeMinimum !== null) {
-      minValue = params.runeMinimum;
-    } else if (!params.isTestnet) {
-      minValue = minimumAtHeight(params.currentBlockHeight);
-    }
-    if (minValue !== null && minValue > 0n) {
-      try {
-        const nameValue = runeNameToU128(params.runeName);
-        if (nameValue < minValue) {
-          return { mode: 'commit-reveal', reason: 'Name not yet unlocked — commit protects against front-running' };
-        }
-      } catch { /* invalid name — let validation catch it */ }
-    }
-  }
-  return { mode: 'quick', reason: 'All conditions met for single-TX etch' };
+  return { mode: 'commit-reveal', reason: 'Named rune etch requires a name commitment (commit-reveal)' };
 }
 
 // --- Store interface ---
@@ -122,8 +106,8 @@ interface BuilderStore {
   toggleSection: (key: string) => void;
   setSection: (key: string, open: boolean) => void;
 
-  // Auto-detected mode
-  detectedMode: 'quick' | 'commit-reveal';
+  // Auto-detected mode (always commit-reveal — see detectEtchMode)
+  detectedMode: 'commit-reveal';
   detectedReason: string;
   redetect: () => void;
 
@@ -137,8 +121,7 @@ interface BuilderStore {
    * `null` when ord is unreachable or we haven't fetched yet. Not persisted —
    * refetched each session because it advances with the chain.
    *
-   * Used by validateRuneName + buildQuickEtchTx to fix Finding #11 (testnet4
-   * silent cenotaph on below-minimum quick etches).
+   * Used by validateRuneName to block below-minimum (locked) names before etch.
    */
   runeMinimum: bigint | null;
   setRuneMinimum: (m: bigint | null) => void;
@@ -173,7 +156,7 @@ interface BuilderStore {
   selectedUtxos: () => LabeledUtxo[];
   changeAddress: () => string;
   /**
-   * Explicit "primary" UTXO id (`txid:vout`) — becomes vin 0 of the commit / quick TX.
+   * Explicit "primary" UTXO id (`txid:vout`) — becomes vin 0 of the commit TX.
    * Inscriptions land on the first sat of vin 0, so the primary UTXO controls which sat
    * receives the etch. null = no explicit choice (UI auto-falls-back to the largest
    * selected via `effectivePrimaryUtxoId`).
@@ -231,9 +214,8 @@ interface BuilderStore {
   selectedRevealFeeRate: number | null;
   setSelectedRevealFeeRate: (rate: number | null) => void;
 
-  // Vanity — these existing fields apply to the REVEAL TX in commit-reveal mode,
-  // and to the single TX in quick mode. Renaming would be more invasive; the new
-  // commit-vanity fields below are explicitly named for clarity.
+  // Vanity — these fields apply to the REVEAL TX. The commit-vanity fields below
+  // are explicitly named and apply to the COMMIT TX.
   vanityConfig: VanityConfig;
   setVanityConfig: (config: VanityConfig) => void;
   vanityProgress: VanityProgress;
@@ -267,8 +249,6 @@ interface BuilderStore {
   // TX results
   revealTxid: string | null;
   setRevealTxid: (txid: string) => void;
-  quickTxid: string | null;
-  setQuickTxid: (txid: string) => void;
 
   // Bundle resume
   loadFromBundle: (bundle: CommitBundle) => void;
@@ -323,19 +303,14 @@ export const useBuilderStore = create<BuilderStore>()(
         openSections: { ...state.openSections, [key]: open },
       })),
 
-      detectedMode: 'quick' as const,
-      detectedReason: 'All conditions met for single-TX etch',
+      detectedMode: 'commit-reveal' as const,
+      detectedReason: 'Named rune etch requires a name commitment (commit-reveal)',
       redetect: () => {
         const s = get();
-        const isTestnet = s.wallet.taprootAddress.startsWith('tb1') || s.wallet.paymentAddress.startsWith('tb1');
         const result = detectEtchMode({
           inscriptionFile: s.inscriptionFile,
           delegateInscriptionId: s.delegateInscriptionId,
           parentInscription: s.parentInscription,
-          runeName: s.etching.runeName,
-          currentBlockHeight: s.currentBlockHeight,
-          isTestnet,
-          runeMinimum: s.runeMinimum,
         });
         set({ detectedMode: result.mode, detectedReason: result.reason });
       },
@@ -518,8 +493,6 @@ export const useBuilderStore = create<BuilderStore>()(
 
       revealTxid: null,
       setRevealTxid: (txid) => set({ revealTxid: txid }),
-      quickTxid: null,
-      setQuickTxid: (txid) => set({ quickTxid: txid }),
 
       loadFromBundle: (bundle) => {
         // Decode the inscription body so UI sections (InscriptionSection) can display it.
@@ -590,8 +563,8 @@ export const useBuilderStore = create<BuilderStore>()(
       reset: () => set({
         phase: 'building',
         openSections: { ...defaultOpenSections },
-        detectedMode: 'quick',
-        detectedReason: 'All conditions met for single-TX etch',
+        detectedMode: 'commit-reveal',
+        detectedReason: 'Named rune etch requires a name commitment (commit-reveal)',
         currentBlockHeight: 0,
         runeMinimum: null,
         wallet: { connected: false, taprootAddress: '', paymentAddress: '', publicKey: '' },
@@ -620,7 +593,6 @@ export const useBuilderStore = create<BuilderStore>()(
         commitState: null,
         bundleDownloaded: false,
         revealTxid: null,
-        quickTxid: null,
         cachedTapscriptHex: null,
         cachedControlBlockHex: null,
         cachedInternalPubkeyHex: null,
@@ -673,7 +645,6 @@ export const useBuilderStore = create<BuilderStore>()(
         cachedControlBlockHex: state.cachedControlBlockHex,
         cachedInternalPubkeyHex: state.cachedInternalPubkeyHex,
         revealTxid: state.revealTxid,
-        quickTxid: state.quickTxid,
       }),
       storage: createJSONStorage(() => localStorage, { replacer, reviver }),
     }

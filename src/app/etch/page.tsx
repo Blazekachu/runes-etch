@@ -14,7 +14,6 @@ import VanityAndFees from '@/components/wizard/VanityAndFees';
 import ReviewAndSign from '@/components/wizard/ReviewAndSign';
 import WaitingRoom from '@/components/wizard/WaitingRoom';
 import RevealAndComplete from '@/components/wizard/RevealAndComplete';
-import QuickEtchReview from '@/components/wizard/QuickEtchReview';
 
 interface StepDef {
   key: WizardStep;
@@ -38,22 +37,18 @@ function getStepsForMode(mode: EtchMode): StepDef[] {
     { key: 'vanity-fees',  label: 'Fees'  },
   );
 
-  if (mode === 'quick') {
-    steps.push({ key: 'quick-review', label: 'Review' });
-  } else {
-    steps.push(
-      { key: 'review',  label: 'Review'  },
-      { key: 'waiting', label: 'Waiting' },
-      { key: 'reveal',  label: 'Reveal'  },
-    );
-  }
+  steps.push(
+    { key: 'review',  label: 'Review'  },
+    { key: 'waiting', label: 'Waiting' },
+    { key: 'reveal',  label: 'Reveal'  },
+  );
 
   return steps;
 }
 
 // Steps at or past this key cannot be navigated backward from
-function getCommitStepKey(mode: EtchMode): WizardStep {
-  return mode === 'quick' ? 'quick-review' : 'waiting';
+function getCommitStepKey(_mode: EtchMode): WizardStep {
+  return 'waiting';
 }
 
 export default function EtchPage() {
@@ -120,7 +115,6 @@ export default function EtchPage() {
       case 'review':        return <ReviewAndSign {...props} />;
       case 'waiting':       return <WaitingRoom {...props} />;
       case 'reveal':        return <RevealAndComplete {...props} />;
-      case 'quick-review':  return <QuickEtchReview {...props} />;
     }
   }
 
