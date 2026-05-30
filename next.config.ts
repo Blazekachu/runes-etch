@@ -45,7 +45,7 @@ const nextConfig: NextConfig = {
             // modal (renders inline in the dapp page on `wallet_connect`).
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
             "font-src 'self' https://fonts.gstatic.com",
-            `connect-src 'self' https://mempool.space https://*.mempool.space https://ordinals.com${ordExtraOrigin}`,
+            `connect-src 'self' https://mempool.space https://*.mempool.space https://mempool.emzy.de https://ordinals.com${ordExtraOrigin}`,
             "img-src 'self' data: blob:",
             "frame-ancestors 'none'",
           ].join('; '),

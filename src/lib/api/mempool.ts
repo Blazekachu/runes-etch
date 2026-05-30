@@ -13,34 +13,79 @@ const MEMPOOL_MAINNET = 'https://mempool.space/api';
 const MEMPOOL_TESTNET4 = 'https://mempool.space/testnet4/api';
 const MEMPOOL_TESTNET3 = 'https://mempool.space/testnet/api';
 
-/** Detect network from address prefix and return the correct API base.
- *  Tries testnet4 first (current default for most wallets), falls back to testnet3. */
-export function mempoolBaseForAddress(address?: string): string {
-  if (address && (address.startsWith('tb1') || address.startsWith('2') || address.startsWith('m') || address.startsWith('n'))) {
-    return MEMPOOL_TESTNET4;
-  }
-  return MEMPOOL_MAINNET;
+// Fallback providers (Punch List #5). All speak the mempool.space Esplora API,
+// so they're drop-in. mempool.space is primary; mempool.emzy.de is a community
+// mirror that ALSO serves testnet4 — the only public testnet4 fallback
+// (blockstream.info has no testnet4). When the primary is unreachable or 5xx,
+// calls transparently fail over to the next provider, and the working one is
+// remembered for the session so a downed primary isn't re-tried on every call.
+const EMZY_MAINNET = 'https://mempool.emzy.de/api';
+const EMZY_TESTNET4 = 'https://mempool.emzy.de/testnet4/api';
+const EMZY_TESTNET3 = 'https://mempool.emzy.de/testnet/api';
+
+const PROVIDERS: Record<'mainnet' | 'testnet4' | 'testnet3', string[]> = {
+  mainnet: [MEMPOOL_MAINNET, EMZY_MAINNET],
+  testnet4: [MEMPOOL_TESTNET4, EMZY_TESTNET4],
+  testnet3: [MEMPOOL_TESTNET3, EMZY_TESTNET3],
+};
+
+function isTestnetAddress(address?: string): boolean {
+  return !!address && (address.startsWith('tb1') || address.startsWith('2') || address.startsWith('m') || address.startsWith('n'));
 }
 
-let MEMPOOL_BASE = MEMPOOL_MAINNET;
+/** Detect network from address prefix and return the primary API base.
+ *  (Kept for direct/display use; live fetches go through the fallback list.) */
+export function mempoolBaseForAddress(address?: string): string {
+  return isTestnetAddress(address) ? MEMPOOL_TESTNET4 : MEMPOOL_MAINNET;
+}
 
-/** Call once at wallet connect to set the API base for the session.
- *  For testnet addresses, probes testnet4 first, then falls back to testnet3. */
-export async function setMempoolNetwork(address: string): Promise<void> {
-  if (address && (address.startsWith('tb1') || address.startsWith('2') || address.startsWith('m') || address.startsWith('n'))) {
-    // Try testnet4 first (current default for Leather, newer wallets)
+// Ordered provider list for the current session, set by setMempoolNetwork().
+let activeBases: string[] = PROVIDERS.mainnet;
+// Index (into the active list) of the last provider that worked — tried first.
+let preferredProviderIdx = 0;
+
+/** Try each base (starting from the last-good one) until one returns without a
+ *  network error or 5xx. 4xx responses are returned as-is — callers like
+ *  fetchUtxos depend on seeing a 400 (too-many-utxos -> /txs walk), and a 4xx is
+ *  a real answer, not a provider outage. Remembers the working provider. */
+async function tryProviders(bases: string[], path: string, init?: RequestInit, timeoutMs = FETCH_TIMEOUT_MS): Promise<Response> {
+  const list = bases.length ? bases : [MEMPOOL_MAINNET];
+  let lastErr: unknown;
+  for (let i = 0; i < list.length; i++) {
+    const idx = (preferredProviderIdx + i) % list.length;
     try {
-      const res = await fetch(`${MEMPOOL_TESTNET4}/address/${encodeURIComponent(address)}/utxo`, { signal: AbortSignal.timeout(5000) });
-      if (res.ok || res.status === 200) {
-        MEMPOOL_BASE = MEMPOOL_TESTNET4;
-        return;
-      }
-    } catch { /* fall through */ }
-    // Fall back to testnet3
-    MEMPOOL_BASE = MEMPOOL_TESTNET3;
+      const res = await fetchWithTimeout(`${list[idx]}${path}`, init, timeoutMs);
+      if (res.status >= 500 && i < list.length - 1) { lastErr = new Error(`${list[idx]} -> ${res.status}`); continue; }
+      preferredProviderIdx = idx;
+      return res;
+    } catch (err) {
+      lastErr = err; // network error / timeout -> try next provider
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('All mempool providers unreachable');
+}
+
+/** Fetch a path against the active network's provider list, with fallback. */
+function mempoolFetch(path: string, init?: RequestInit, timeoutMs?: number): Promise<Response> {
+  return tryProviders(activeBases, path, init, timeoutMs);
+}
+
+/** Call once at wallet connect to set the API provider list for the session.
+ *  Testnet addresses default to testnet4 (our chain); only if testnet4 is
+ *  unreachable across ALL providers do we fall back to testnet3. */
+export async function setMempoolNetwork(address: string): Promise<void> {
+  preferredProviderIdx = 0;
+  if (isTestnetAddress(address)) {
+    activeBases = PROVIDERS.testnet4;
+    try {
+      const res = await mempoolFetch(`/address/${encodeURIComponent(address)}/utxo`, undefined, 5000);
+      // 2xx or 400 (too-many-utxos) both confirm testnet4 is the right network.
+      if (res.ok || res.status === 400) return;
+    } catch { /* all testnet4 providers unreachable */ }
+    activeBases = PROVIDERS.testnet3;
     return;
   }
-  MEMPOOL_BASE = MEMPOOL_MAINNET;
+  activeBases = PROVIDERS.mainnet;
 }
 
 const FETCH_TIMEOUT_MS = 15000;
@@ -85,7 +130,7 @@ export async function fetchFeeRates(): Promise<FeeRates> {
   // concurrent load (e.g. while a parallel /utxo or /txs walk is hammering it),
   // and the default 15s would abort under those conditions.
   const res = await withRetry(() =>
-    fetchWithTimeout(`${MEMPOOL_BASE}/v1/fees/recommended`, undefined, 30_000)
+    mempoolFetch('/v1/fees/recommended', undefined, 30_000)
   );
   if (!res.ok) throw new Error(`Failed to fetch fee rates: ${res.status}`);
   const data = await res.json();
@@ -105,7 +150,7 @@ export async function fetchFeeRates(): Promise<FeeRates> {
 
 export async function fetchUtxos(address: string): Promise<Utxo[]> {
   validateAddress(address);
-  const res = await fetchWithTimeout(`${MEMPOOL_BASE}/address/${encodeURIComponent(address)}/utxo`);
+  const res = await mempoolFetch(`/address/${encodeURIComponent(address)}/utxo`);
   // mempool.space (esplora) /utxo returns 400 on addresses with too many UTXOs
   // (undocumented cap, ~500). Fall back to walking /txs and deriving UTXOs
   // client-side. Other failures propagate normally.
@@ -145,10 +190,10 @@ interface EsploraTx {
  */
 const WALK_TIMEOUT_MS = 45_000;
 
-async function walkFetch(url: string): Promise<Response> {
+async function walkFetch(path: string): Promise<Response> {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      return await fetchWithTimeout(url, undefined, WALK_TIMEOUT_MS);
+      return await mempoolFetch(path, undefined, WALK_TIMEOUT_MS);
     } catch (err) {
       if (attempt === 1) throw err;
     }
@@ -162,10 +207,10 @@ async function fetchUtxosByTxWalk(address: string): Promise<Utxo[]> {
   // Confirmed txs, paginated by last-seen txid.
   let lastSeen: string | undefined;
   for (let page = 0; page < 400; page++) {  // hard cap: 400 pages = 10,000 txs
-    const url = lastSeen
-      ? `${MEMPOOL_BASE}/address/${encodeURIComponent(address)}/txs/chain/${lastSeen}`
-      : `${MEMPOOL_BASE}/address/${encodeURIComponent(address)}/txs/chain`;
-    const res = await walkFetch(url);
+    const path = lastSeen
+      ? `/address/${encodeURIComponent(address)}/txs/chain/${lastSeen}`
+      : `/address/${encodeURIComponent(address)}/txs/chain`;
+    const res = await walkFetch(path);
     if (!res.ok) throw new Error(`Failed to walk address txs: ${res.status}`);
     const batch: EsploraTx[] = await res.json();
     if (!Array.isArray(batch) || batch.length === 0) break;
@@ -176,7 +221,7 @@ async function fetchUtxosByTxWalk(address: string): Promise<Utxo[]> {
 
   // Unconfirmed txs (single non-paginated batch, up to 50).
   try {
-    const memRes = await walkFetch(`${MEMPOOL_BASE}/address/${encodeURIComponent(address)}/txs/mempool`);
+    const memRes = await walkFetch(`/address/${encodeURIComponent(address)}/txs/mempool`);
     if (memRes.ok) {
       const memBatch: EsploraTx[] = await memRes.json();
       if (Array.isArray(memBatch)) txs.push(...memBatch);
@@ -210,7 +255,7 @@ async function fetchUtxosByTxWalk(address: string): Promise<Utxo[]> {
 
 export async function broadcastTx(txHex: string): Promise<string> {
   if (!TX_HEX_RE.test(txHex)) throw new Error('Invalid transaction hex');
-  const res = await fetchWithTimeout(`${MEMPOOL_BASE}/tx`, {
+  const res = await mempoolFetch('/tx', {
     method: 'POST',
     body: txHex,
   });
@@ -228,13 +273,13 @@ export async function getTxStatus(txid: string): Promise<{
   block_height?: number;
 }> {
   validateTxid(txid);
-  const res = await fetchWithTimeout(`${MEMPOOL_BASE}/tx/${txid}/status`);
+  const res = await mempoolFetch(`/tx/${txid}/status`);
   if (!res.ok) throw new Error(`Failed to fetch TX status: ${res.status}`);
   return res.json();
 }
 
 export async function getCurrentBlockHeight(): Promise<number> {
-  const res = await fetchWithTimeout(`${MEMPOOL_BASE}/blocks/tip/height`);
+  const res = await mempoolFetch('/blocks/tip/height');
   if (!res.ok) throw new Error(`Failed to fetch block height: ${res.status}`);
   const height = parseInt(await res.text(), 10);
   // L3: Guard against NaN from non-numeric API response
@@ -242,25 +287,24 @@ export async function getCurrentBlockHeight(): Promise<number> {
   return height;
 }
 
-/** mempool.space API base keyed by the bitcoin network name ord reports in its
- *  /status `chain` field. Unknown chains fall back to mainnet. */
-const MEMPOOL_BASE_BY_CHAIN: Record<string, string> = {
-  bitcoin: MEMPOOL_MAINNET,
-  main: MEMPOOL_MAINNET,
-  mainnet: MEMPOOL_MAINNET,
-  testnet4: MEMPOOL_TESTNET4,
-  testnet: MEMPOOL_TESTNET3,
-  testnet3: MEMPOOL_TESTNET3,
-  signet: 'https://mempool.space/signet/api',
-};
+/** Provider list (with fallback) keyed by the bitcoin network name ord reports
+ *  in its /status `chain` field. Unknown chains fall back to mainnet. */
+function providersForChain(chain: string): string[] {
+  switch (chain) {
+    case 'testnet4': return PROVIDERS.testnet4;
+    case 'testnet':
+    case 'testnet3': return PROVIDERS.testnet3;
+    case 'signet': return ['https://mempool.space/signet/api', 'https://mempool.emzy.de/signet/api'];
+    default: return PROVIDERS.mainnet; // bitcoin / main / mainnet / unknown
+  }
+}
 
 /** Fetch the chain tip height for an EXPLICIT network (by ord's reported `chain`
- *  name), independent of the session-global MEMPOOL_BASE. Lets callers such as
- *  the ord health probe measure lag against the SAME chain ord is indexing,
- *  with no dependency on the async setMempoolNetwork() arming (see Punch List #2). */
+ *  name), independent of the session-active provider list. Lets callers such as
+ *  the ord health probe measure lag against the SAME chain ord is indexing, with
+ *  provider fallback and no dependency on setMempoolNetwork() (Punch List #2/#5). */
 export async function getChainTipForChain(chain: string): Promise<number> {
-  const base = MEMPOOL_BASE_BY_CHAIN[chain] ?? MEMPOOL_MAINNET;
-  const res = await fetchWithTimeout(`${base}/blocks/tip/height`);
+  const res = await tryProviders(providersForChain(chain), '/blocks/tip/height');
   if (!res.ok) throw new Error(`Failed to fetch block height: ${res.status}`);
   const height = parseInt(await res.text(), 10);
   if (isNaN(height) || height < 0) throw new Error('Invalid block height from API');
