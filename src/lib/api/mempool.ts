@@ -71,21 +71,15 @@ function mempoolFetch(path: string, init?: RequestInit, timeoutMs?: number): Pro
 }
 
 /** Call once at wallet connect to set the API provider list for the session.
- *  Testnet addresses default to testnet4 (our chain); only if testnet4 is
- *  unreachable across ALL providers do we fall back to testnet3. */
+ *  `tb1…/2…/m…/n…` ⇒ testnet4 (our stack); everything else ⇒ mainnet.
+ *
+ *  We do NOT probe-then-downgrade to testnet3 (Punch List #8): testnet3 is legacy/
+ *  dead, and a transient testnet4-provider outage at connect time must never misroute
+ *  the whole session onto a network the wallet isn't on. Per-call provider fallback
+ *  within the chosen network (mempool.space → mempool.emzy.de) still applies. */
 export async function setMempoolNetwork(address: string): Promise<void> {
   preferredProviderIdx = 0;
-  if (isTestnetAddress(address)) {
-    activeBases = PROVIDERS.testnet4;
-    try {
-      const res = await mempoolFetch(`/address/${encodeURIComponent(address)}/utxo`, undefined, 5000);
-      // 2xx or 400 (too-many-utxos) both confirm testnet4 is the right network.
-      if (res.ok || res.status === 400) return;
-    } catch { /* all testnet4 providers unreachable */ }
-    activeBases = PROVIDERS.testnet3;
-    return;
-  }
-  activeBases = PROVIDERS.mainnet;
+  activeBases = isTestnetAddress(address) ? PROVIDERS.testnet4 : PROVIDERS.mainnet;
 }
 
 const FETCH_TIMEOUT_MS = 15000;
