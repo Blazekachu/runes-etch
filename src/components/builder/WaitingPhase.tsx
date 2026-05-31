@@ -15,7 +15,15 @@ import * as ecc from 'tiny-secp256k1';
 
 bitcoin.initEccLib(ecc);
 
-const REQUIRED_CONFIRMATIONS = 6;
+// Reveal unlocks at 5 commit-confirmations. A reveal broadcast now mines in the NEXT
+// block at the earliest (commit+5), where the commit reaches 6 confirmations — the
+// Runes protocol minimum (ord COMMIT_CONFIRMATIONS = 6; rule: at the reveal's block,
+// reveal_block - commit_block + 1 >= 6). Because a reveal broadcast at 5 confs can only
+// be mined at block >= commit+5, it ALWAYS lands at >= 6 confs — never a cenotaph.
+// Real mainnet etches land exactly here, e.g. BITCOIN INSCRIBED PHALLUS: commit @840295,
+// reveal @840300 = 6 confs at the reveal block. (Was 6, which made the reveal land at 7
+// — one block more conservative than the protocol requires.)
+const REQUIRED_CONFIRMATIONS = 5;
 const POLL_INTERVAL_MS = 15_000;
 function mempoolTxUrl(address: string): string {
   if (address.startsWith('tb1') || address.startsWith('2') || address.startsWith('m') || address.startsWith('n')) {
