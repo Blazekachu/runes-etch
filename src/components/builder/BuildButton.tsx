@@ -28,6 +28,7 @@ export default function BuildButton() {
   const setCommitState = useBuilderStore((s) => s.setCommitState);
   const setCachedTapscript = useBuilderStore((s) => s.setCachedTapscript);
   const orderedFundingUtxos = useBuilderStore((s) => s.orderedFundingUtxos);
+  const utxos = useBuilderStore((s) => s.utxos);
   const getChangeAddress = useBuilderStore((s) => s.changeAddress);
   const commitState = useBuilderStore((s) => s.commitState);
   const reinscribeMode = useBuilderStore((s) => s.reinscribeMode);
@@ -53,7 +54,9 @@ export default function BuildButton() {
 
   // Use the ordered list — primary UTXO is first, so it becomes vin 0 of the commit TX.
   // Inscription lands on the first sat of vin 0, so primary controls the rune/inscription's sat.
-  const selected = orderedFundingUtxos();
+  // Subscribing to `utxos` above forces a re-render on selection toggle; the
+  // orderedFundingUtxos() selector fn ref alone wouldn't (Punch List #7).
+  const selected = utxos.length ? orderedFundingUtxos() : [];
 
   // In reinscribe mode, the first input (primary, vin 0) MUST be an inscription UTXO so the
   // existing inscription's sat is the one carried into the commit output at offset 0.

@@ -8,10 +8,12 @@ export default function TxPreview() {
   const delegateInscriptionId = useBuilderStore((s) => s.delegateInscriptionId);
   const parentInscription = useBuilderStore((s) => s.parentInscription);
   const detectedReason = useBuilderStore((s) => s.detectedReason);
-  const selectedUtxos = useBuilderStore((s) => s.selectedUtxos);
+  // Subscribe to `utxos` (the data), not the selectedUtxos() selector fn — the fn ref
+  // is stable, so subscribing to it wouldn't re-render on a selection toggle (#7).
+  const utxos = useBuilderStore((s) => s.utxos);
   const selectedFeeRate = useBuilderStore((s) => s.selectedFeeRate);
 
-  const selected = selectedUtxos();
+  const selected = utxos.filter((u) => u.selected);
   const totalIn = selected.reduce((acc, u) => acc + u.value, 0);
   const hasInscription = !!inscriptionFile || !!delegateInscriptionId;
   const hasParent = !!parentInscription;
