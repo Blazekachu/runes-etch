@@ -9,6 +9,7 @@ import { createCommitBundle, downloadBundle } from '@/lib/bundle/export';
 import { buildTapscript, buildBareTapscript } from '@/lib/runes/inscription';
 import { runeNameToCommitmentBytes } from '@/lib/runes/names';
 import { buildRevealTx, serializeForTxid } from '@/lib/runes/reveal';
+import { resolveParentInscription } from '@/lib/runes/resolveParent';
 import { VanityGrinder } from '@/lib/vanity/grinder';
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
@@ -43,6 +44,9 @@ export default function WaitingPhase() {
   const inscriptionFile = useBuilderStore((s) => s.inscriptionFile);
   const delegateInscriptionId = useBuilderStore((s) => s.delegateInscriptionId);
   const parentInscription = useBuilderStore((s) => s.parentInscription);
+  const setParentInscription = useBuilderStore((s) => s.setParentInscription);
+  const pendingParentId = useBuilderStore((s) => s.pendingParentId);
+  const setPendingParentId = useBuilderStore((s) => s.setPendingParentId);
   const bundleDownloaded = useBuilderStore((s) => s.bundleDownloaded);
   const setBundleDownloaded = useBuilderStore((s) => s.setBundleDownloaded);
   const setVanityProgress = useBuilderStore((s) => s.setVanityProgress);
@@ -69,6 +73,8 @@ export default function WaitingPhase() {
   const [grindError, setGrindError] = useState<string | null>(null);
   const [bundleError, setBundleError] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
+  const [parentResolveError, setParentResolveError] = useState<string | null>(null);
+  const [resolvingParent, setResolvingParent] = useState(false);
   const [feeMode, setFeeMode] = useState<'economy' | 'normal' | 'fast' | 'custom'>('normal');
   const [customRate, setCustomRate] = useState('');
   const [loadingFees, setLoadingFees] = useState(false);
@@ -83,7 +89,35 @@ export default function WaitingPhase() {
 
   const hasVanity = vanityConfig.prefix.length > 0 || vanityConfig.suffix.length > 0;
   const vanityReady = !hasVanity || vanityProgress.found || vanitySkipped;
-  const canProceed = confirmations >= REQUIRED_CONFIRMATIONS && vanityReady && !needsReconnect;
+  // #10: bundle-resume silently drops the parent. loadFromBundle stashes `pendingParentId`
+  // expecting ParentSection to re-resolve it — but ParentSection isn't mounted in the waiting
+  // phase, so a Full etch resumed via bundle would reveal WITHOUT spending the parent UTXO,
+  // breaking the parent linkage. Re-resolve here (the parent may have moved since commit, so we
+  // re-fetch its live UTXO) and BLOCK the reveal until it succeeds.
+  const reResolveParent = useCallback(async () => {
+    const pid = useBuilderStore.getState().pendingParentId;
+    if (!pid || useBuilderStore.getState().parentInscription || !wallet.connected) return;
+    setResolvingParent(true);
+    setParentResolveError(null);
+    const res = await resolveParentInscription(pid, wallet);
+    setResolvingParent(false);
+    if (res.ok && res.owned) {
+      setParentInscription(res.parent);
+      setPendingParentId(null);
+    } else {
+      // keep pendingParentId set so the reveal stays blocked; surface the reason
+      setParentResolveError(res.ok ? 'Parent inscription is not owned by this wallet.' : res.error);
+    }
+  }, [wallet, setParentInscription, setPendingParentId]);
+
+  useEffect(() => {
+    if (pendingParentId && !parentInscription && wallet.connected) void reResolveParent();
+  }, [pendingParentId, parentInscription, wallet.connected, reResolveParent]);
+
+  // A parent committed-to but not yet re-resolved must block the reveal (else the linkage drops).
+  const parentPending = !!pendingParentId && !parentInscription;
+
+  const canProceed = confirmations >= REQUIRED_CONFIRMATIONS && vanityReady && !needsReconnect && !parentPending;
 
   // Estimated blocks remaining and time
   const blocksRemaining = Math.max(0, REQUIRED_CONFIRMATIONS - confirmations);
@@ -671,6 +705,24 @@ export default function WaitingPhase() {
         )}
       </div>
 
+      {/* Parent re-resolution (bundle-resume) \u2014 must succeed before reveal (#10) */}
+      {parentPending && (
+        <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-300 flex items-center justify-between gap-3">
+          <span>
+            {resolvingParent
+              ? 'Re-resolving the parent inscription before reveal\u2026'
+              : parentResolveError
+                ? `Parent inscription couldn't be verified: ${parentResolveError}. The reveal is blocked until it resolves (otherwise the parent linkage would be silently dropped).`
+                : 'This etch links a parent inscription \u2014 verifying it before reveal.'}
+          </span>
+          {!resolvingParent && (
+            <button onClick={() => void reResolveParent()} className="text-xs underline text-yellow-200 hover:text-yellow-100 whitespace-nowrap">
+              Retry
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Proceed button */}
       <div className="pt-2">
         <button
@@ -678,7 +730,11 @@ export default function WaitingPhase() {
           disabled={!canProceed}
           className="w-full rounded-lg bg-orange-500 hover:bg-orange-400 active:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed px-6 py-2.5 font-semibold text-white transition-colors"
         >
-          {canProceed ? 'Proceed to Reveal' : `Waiting\u2026 (${confirmations}/${REQUIRED_CONFIRMATIONS} confirmations)`}
+          {canProceed
+            ? 'Proceed to Reveal'
+            : parentPending
+              ? (resolvingParent ? 'Verifying parent\u2026' : 'Parent inscription required')
+              : `Waiting\u2026 (${confirmations}/${REQUIRED_CONFIRMATIONS} confirmations)`}
         </button>
       </div>
     </div>

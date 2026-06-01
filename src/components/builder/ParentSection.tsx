@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
-import { getInscription, getOutput } from '@/lib/api/ordinals';
+import { resolveParentInscription } from '@/lib/runes/resolveParent';
 import SectionWrapper from './SectionWrapper';
 
 export default function ParentSection() {
@@ -11,7 +11,6 @@ export default function ParentSection() {
   const pendingParentId = useBuilderStore((s) => s.pendingParentId);
   const setPendingParentId = useBuilderStore((s) => s.setPendingParentId);
   const wallet = useBuilderStore((s) => s.wallet);
-  const isTestnet = wallet.taprootAddress.startsWith('tb1');
 
   const [parentId, setParentId] = useState(parentInscription?.inscriptionId ?? pendingParentId ?? '');
   const [verifyState, setVerifyState] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle');
@@ -21,8 +20,6 @@ export default function ParentSection() {
   useEffect(() => {
     if (parentInscription?.inscriptionId) setParentId(parentInscription.inscriptionId);
   }, [parentInscription?.inscriptionId]);
-
-  const INSCRIPTION_ID_REGEX = /^[0-9a-fA-F]{64}i\d+$/;
 
   // Badge: truncated parent ID if verified
   let badge: string | undefined;
@@ -38,60 +35,26 @@ export default function ParentSection() {
   async function handleParentVerify(explicitId?: string) {
     const source = typeof explicitId === 'string' ? explicitId : parentId;
     const id = source.trim();
-    if (!INSCRIPTION_ID_REGEX.test(id)) {
-      setVerifyState('error');
-      setVerifyError('Invalid inscription ID format.');
-      return;
-    }
     setParentId(id);
     setVerifyState('loading');
     setVerifyError('');
 
-    // On testnet, ordinals.com is mainnet-only — use the TXID from the inscription ID
-    // to look up the UTXO via mempool API instead
-    if (isTestnet) {
-      try {
-        const [txid, indexStr] = id.split('i');
-        const vout = parseInt(indexStr, 10) || 0;
-        // Use mempool API to verify the TX exists and get the output value
-        const { fetchUtxos } = await import('@/lib/api/mempool');
-        const utxos = await fetchUtxos(wallet.taprootAddress);
-        const utxo = utxos.find(u => u.txid === txid && u.vout === vout);
-        if (utxo) {
-          setParentInscription({ inscriptionId: id, txid, vout, value: utxo.value, address: wallet.taprootAddress });
-        } else {
-          // UTXO not on our address — trust the user, use dummy value
-          setParentInscription({ inscriptionId: id, txid, vout, value: 546, address: wallet.taprootAddress });
-        }
-        setVerifyState('ok');
-      } catch (err) {
-        setVerifyState('error');
-        setVerifyError(err instanceof Error ? err.message : 'Failed to verify on testnet');
-        setParentInscription(null);
-      }
+    const res = await resolveParentInscription(id, wallet);
+    if (!res.ok) {
+      setVerifyState('error');
+      setVerifyError(res.error);
+      setParentInscription(null);
       return;
     }
-
-    try {
-      const info = await getInscription(id);
-      const [txid, voutStr] = info.output.split(':');
-      const vout = parseInt(voutStr, 10);
-      const outputInfo = await getOutput(txid, vout);
-      const ownerAddress = info.address;
-      const isOwned = ownerAddress === wallet.taprootAddress || ownerAddress === wallet.paymentAddress;
-      setParentInscription({ inscriptionId: id, txid, vout, value: outputInfo.value, address: ownerAddress });
-      if (isOwned) {
-        setVerifyState('ok');
-      } else {
-        setVerifyState('error');
-        setVerifyError(`Parent not owned by signer. Current owner: ${ownerAddress.slice(0, 12)}…${ownerAddress.slice(-8)}`);
-        setParentInscription(null);
-      }
-    } catch (err) {
+    if (!res.owned) {
+      const owner = res.parent.address;
       setVerifyState('error');
-      setVerifyError(err instanceof Error ? err.message : 'Inscription not found');
+      setVerifyError(`Parent not owned by signer. Current owner: ${owner.slice(0, 12)}…${owner.slice(-8)}`);
       setParentInscription(null);
+      return;
     }
+    setParentInscription(res.parent);
+    setVerifyState('ok');
   }
 
   function handleParentIdChange(val: string) {
