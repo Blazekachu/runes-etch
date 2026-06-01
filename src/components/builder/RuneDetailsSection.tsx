@@ -282,8 +282,13 @@ export default function RuneDetailsSection() {
         {letters.length >= 2 && (
           <div className="flex flex-col gap-2">
             <label className="text-sm font-medium text-gray-300">
-              Spacers <span className="text-gray-500 font-normal">(click between letters to toggle •)</span>
+              Spacers <span className="text-gray-500 font-normal">(optional, cosmetic)</span>
             </label>
+            <p className="text-xs text-gray-500">
+              A space is shown as <span className="text-orange-400">•</span> between letters (e.g.{' '}
+              <span className="font-mono text-gray-400">EBO•LA</span>) — purely visual, it doesn&apos;t change the
+              rune name. Click a gap to add or remove one.
+            </p>
             <div className="flex flex-wrap items-center gap-0 rounded-lg border border-gray-700 bg-gray-900 px-4 py-3">
               {letters.map((ch, i) => (
                 <span key={i} className="flex items-center">
@@ -294,7 +299,7 @@ export default function RuneDetailsSection() {
                       className={`w-6 h-6 flex items-center justify-center text-sm rounded transition-colors mx-0.5 ${
                         spacerPositions.includes(i)
                           ? 'text-orange-400 hover:text-orange-300'
-                          : 'text-gray-700 hover:text-gray-400'
+                          : 'text-gray-800 hover:text-orange-400'
                       }`}
                       title={spacerPositions.includes(i) ? 'Remove spacer' : 'Add spacer'}
                     >
