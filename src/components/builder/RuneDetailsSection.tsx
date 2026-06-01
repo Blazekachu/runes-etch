@@ -286,8 +286,8 @@ export default function RuneDetailsSection() {
             </label>
             <p className="text-xs text-gray-500">
               A space is shown as <span className="text-orange-400">•</span> between letters (e.g.{' '}
-              <span className="font-mono text-gray-400">EBO•LA</span>) — purely visual, it doesn&apos;t change the
-              rune name. Click a gap to add or remove one.
+              <span className="font-mono text-gray-400">UNCOMMON•GOODS</span>) — purely visual, it doesn&apos;t
+              change the rune name. Click a gap to add or remove one.
             </p>
             <div className="flex flex-wrap items-center gap-0 rounded-lg border border-gray-700 bg-gray-900 px-4 py-3">
               {letters.map((ch, i) => (
