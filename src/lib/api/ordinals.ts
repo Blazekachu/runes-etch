@@ -39,8 +39,11 @@ function ordBase(): string {
  * True when the current network's ord base is the public default (ordinals.com).
  * Used to decide whether testnet calls should skip — they should only skip when
  * the user hasn't configured a custom testnet indexer (public ord is mainnet-only).
+ *
+ * Exported so parent-inscription resolution can decide whether ord is able to
+ * answer for this network (always on mainnet, on testnet only with a local ord).
  */
-function isPublicOrdForCurrentNetwork(): boolean {
+export function isPublicOrdForCurrentNetwork(): boolean {
   return ordBase() === PUBLIC_ORD_DEFAULT;
 }
 
@@ -404,7 +407,9 @@ export async function resolveParentForReveal(
 > {
   try {
     const info = await getInscription(parentInscriptionId);
-    const [txid, voutStr] = info.output.split(':');
+    // Current location lives in `satpoint` ("txid:vout:offset"). The legacy
+    // `output` field is absent on some ord builds (#12) — satpoint is always present.
+    const [txid, voutStr] = info.satpoint.split(':');
     const vout = parseInt(voutStr, 10);
 
     const output = await getOutput(txid, vout);

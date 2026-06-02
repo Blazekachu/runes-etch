@@ -146,11 +146,11 @@ export default function RevealAndComplete(_props?: Record<string, unknown>) {
         throw new Error(`Commit TX only has ${confirmations}/6 confirmations. Please wait.`);
       }
 
-      // Re-resolve parent inscription UTXO — it may have moved since commit
-      // Skip on testnet (ordinals.com is mainnet-only)
-      const isTestnet = wallet.taprootAddress.startsWith('tb1');
+      // Re-resolve the parent inscription's CURRENT UTXO — it may have moved since the
+      // commit. Runs on BOTH networks (testnet uses the local ord). Spending a stale/genesis
+      // outpoint is what caused #12 (reveal `bad-txns-inputs-missingorspent`), so never skip.
       let resolvedParent = parentInscription;
-      if (hasInscription && parentInscription && !isTestnet) {
+      if (hasInscription && parentInscription) {
         const parentResult = await resolveParentForReveal(
           parentInscription.inscriptionId,
           wallet.taprootAddress

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { getRuneNameStatus, checkRuneNameAvailable, getRuneMinimumFromOrd, setOrdinalsTestnet } from '../ordinals';
+import { getRuneNameStatus, checkRuneNameAvailable, getRuneMinimumFromOrd, setOrdinalsTestnet, resolveParentForReveal } from '../ordinals';
 
 /**
  * Tests for Finding #10 — ord 404 must not silently mean "name is available"
@@ -38,6 +38,54 @@ function installFetchMock(r: MockResponses) {
     throw new Error(`Unmocked fetch: ${u}`);
   }) as unknown as typeof fetch;
 }
+
+describe('resolveParentForReveal (#12 — current location via satpoint, no `output` field)', () => {
+  const USER = 'tb1p58h0wl2d74za6lesf8u9ews0z7cq604085dgj4uprx9tktmreznqp4dvtg';
+  const OTHER = 'tb1pgw439hxzr7vj0gzfqx69wl3plem4ne26kj7ktnuzj3lkpw5mmp3qhz7yv4';
+  const GENESIS = '7c16f5d1998b8eabb3f94fe8547a77c36d46c7d16fc8d766528d7bc6b31e38cc';
+  const CURRENT = 'ea1cf4c7586eb19171b5205c0827cc3fc905d5682267e84ebc2339ac9779c377';
+  const ID = `${GENESIS}i0`;
+
+  beforeEach(() => setOrdinalsTestnet('bc1qany')); // fetch is fully mocked; network irrelevant here
+
+  // ord build that returns `satpoint` and NO legacy `output` field (the #12 trap).
+  function mockOrd(address: string) {
+    global.fetch = vi.fn(async (url: string | URL) => {
+      const u = url.toString();
+      if (u.includes('/inscription/')) {
+        return new Response(
+          JSON.stringify({ id: ID, address, satpoint: `${CURRENT}:0:0`, sat: 102955508042499 }),
+          { status: 200 },
+        );
+      }
+      if (u.includes(`/output/${CURRENT}:0`)) {
+        return new Response(
+          JSON.stringify({ address, inscriptions: [ID], runes: {}, value: 9889 }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`Unmocked fetch: ${u}`);
+    }) as unknown as typeof fetch;
+  }
+
+  it('resolves to the live satpoint UTXO when the inscription record omits `output`', async () => {
+    mockOrd(USER);
+    const r = await resolveParentForReveal(ID, USER);
+    expect(r.status).toBe('ready');
+    if (r.status === 'ready') {
+      expect(r.parent.txid).toBe(CURRENT); // live UTXO, not the spent genesis
+      expect(r.parent.vout).toBe(0);
+      expect(r.parent.value).toBe(9889);
+    }
+  });
+
+  it('reports moved when the inscription now lives on another address', async () => {
+    mockOrd(OTHER);
+    const r = await resolveParentForReveal(ID, USER);
+    expect(r.status).toBe('moved');
+    if (r.status === 'moved') expect(r.currentAddress).toBe(OTHER);
+  });
+});
 
 describe('getRuneNameStatus (Finding #10 — lag-aware rune lookup)', () => {
   beforeEach(() => {
