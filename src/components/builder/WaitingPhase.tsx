@@ -412,6 +412,19 @@ export default function WaitingPhase() {
     }
   }
 
+  // #13 — auto-save the resume bundle ONCE, the moment the commit is in hand, so an
+  // abandoned or failed reveal can never strand the etch with no bundle to re-upload.
+  // Best-effort: only when buildable (commit present + wallet connected) and only once.
+  const autoSavedBundleRef = useRef(false);
+  useEffect(() => {
+    if (autoSavedBundleRef.current || !commitState || bundleDownloaded || !wallet.connected) return;
+    autoSavedBundleRef.current = true;
+    handleBundleDownload();
+    // handleBundleDownload is recreated each render but only reads current store/wallet
+    // state at call time; safe to omit from deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commitState, bundleDownloaded, wallet.connected]);
+
   function handleProceed() {
     useBuilderStore.getState().setPhase('reveal');
   }

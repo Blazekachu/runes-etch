@@ -50,7 +50,15 @@ export default function EtchV2Page() {
   }, [phase]);
 
   function handleStartOver() {
-    if (confirm('Start over? This will reset all progress. Your commit TX (if broadcast) is still safe on-chain.')) {
+    const s = useBuilderStore.getState();
+    const unfinished = !!s.commitState && s.phase !== 'building' && s.phase !== 'complete';
+    let msg = 'Start over? This will reset all progress. Your commit TX (if broadcast) is still safe on-chain.';
+    if (unfinished && !s.bundleDownloaded) {
+      msg = '⚠ UNFINISHED ETCH: your commit is on-chain but the reveal has NOT been broadcast, and no bundle has been saved. Without the bundle you may be unable to resume and complete the rune. Start over anyway?';
+    } else if (unfinished) {
+      msg = 'Start over? Your commit is on-chain and the reveal is not finished yet. Keep your saved bundle to resume later. Reset all progress now?';
+    }
+    if (confirm(msg)) {
       reset();
     }
   }
