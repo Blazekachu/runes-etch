@@ -4,71 +4,9 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { fetchUtxos, setMempoolNetwork } from '@/lib/api/mempool';
 import { fetchUtxoSatInfo, isOrdinalsTestnet, setOrdinalsTestnet } from '@/lib/api/ordinals';
-import {
-  estimateTxVBytes,
-  type EstimatorInput,
-  type EstimatorOutput,
-} from '@/lib/runes/txSize';
+import { estimateCommitFunding } from '@/lib/runes/commit';
 import type { LabeledUtxo, SatRarity } from '@/types';
 import SectionWrapper from './SectionWrapper';
-
-/** Estimate how many sats the commit TX needs (commit output + 1-input commit fee).
- *  Takes commit and reveal rates separately to match commit.ts — the reveal-budget
- *  portion of commit.vout[0] is sized by revealFeeRate, the commit fee by
- *  commitFeeRate. Caller should pass revealFeeRate = commitFeeRate when the user
- *  picks "match commit" (i.e. selectedRevealFeeRate is null).
- *
- *  #9: per-type sizing via the same `estimateTxVBytes` (lib/runes/txSize.ts) we
- *  calibrated for Finding #1 (the BUDDY etch overshoot). Previously this function
- *  hand-rolled `outputs * 43` (assuming every output is P2TR) and added a stray
- *  `+ 50` buffer — same anti-pattern Finding #1 killed. On mainnet
- *  at 200 sat/vB that overcounted reveal vsize by ~12 vB × outputs (~2.4k sats
- *  wasted on the commit's pre-funded reveal budget) and the commit TX by ~12
- *  vB (~2.4k sats overpaid). */
-function estimateCost(
-  commitFeeRate: number,
-  revealFeeRate: number,
-  hasInscription: boolean,
-  hasParent: boolean,
-  contentSize: number,
-): number {
-  // ---- Reveal TX ----
-  // Inputs: 1 p2tr (the commit output, script-path-spend) plus optional parent p2tr
-  // (key-path-spend). Inscription content lives in the script-path witness — we
-  // add its vsize contribution separately below (witness discount = bytes / 4).
-  const revealInputs: EstimatorInput[] = [{ type: 'p2tr' }];
-  if (hasParent) revealInputs.push({ type: 'p2tr' });
-
-  // Outputs (matches reveal.ts construction):
-  //   - 1 p2tr rune-receiver dust (always; the premine's pointer-target sat)
-  //   - 1 p2tr parent-return dust (only if hasParent)
-  //   - 1 OP_RETURN runestone, ~25 bytes typical
-  //   - 1 p2wpkh change to payment (#12 — segwit, not taproot)
-  const revealOutputs: EstimatorOutput[] = [{ type: 'p2tr' }];
-  if (hasParent) revealOutputs.push({ type: 'p2tr' });
-  revealOutputs.push({ type: 'op_return', scriptByteLen: 25 });
-  revealOutputs.push({ type: 'p2wpkh' });
-
-  const baseRevealVB = estimateTxVBytes(revealInputs, revealOutputs);
-  const witnessContentVB = hasInscription ? Math.ceil(contentSize / 4) : 0;
-  const revealVB = baseRevealVB + witnessContentVB;
-  const revealFee = Math.ceil(revealVB * revealFeeRate);
-
-  const inscDust = hasInscription ? 546 : 0;
-  const parentDust = hasParent ? 546 : 0;
-  const commitOutputValue = revealFee + inscDust + parentDust + 546;
-
-  // ---- Commit TX ----
-  // Inputs: 1 p2wpkh (payment funding). Outputs: 1 p2tr (commit address) +
-  // 1 p2wpkh (change to payment per #12).
-  const commitVB = estimateTxVBytes(
-    [{ type: 'p2wpkh' }],
-    [{ type: 'p2tr' }, { type: 'p2wpkh' }],
-  );
-  const commitFee = Math.ceil(commitVB * commitFeeRate);
-
-  return commitOutputValue + commitFee;
-}
 
 /** Pure function version of isSelectable (no hooks dependency).
  *  Reinscribe mode unlocks inscription-labeled UTXOs (rune-labeled stay blocked — burn risk). */
@@ -85,6 +23,7 @@ function isSelectableStatic(
 
 export default function UtxoSection() {
   const wallet = useBuilderStore((s) => s.wallet);
+  const productMode = useBuilderStore((s) => s.productMode);
   const utxos = useBuilderStore((s) => s.utxos);
   const setUtxos = useBuilderStore((s) => s.setUtxos);
   const toggleUtxoSelection = useBuilderStore((s) => s.toggleUtxoSelection);
@@ -107,23 +46,27 @@ export default function UtxoSection() {
   const [error, setError] = useState<string | null>(null);
   const autoSelectedRef = useRef(false);
 
-  const hasInscription = !!inscriptionFile || !!delegateInscriptionId;
-  const hasParent = !!parentInscription;
+  const hasParent = productMode === 'parent-child' && !!parentInscription;
   const contentSize = inscriptionFile?.body.length ?? 0;
 
   // Estimated cost in sats. commit.vout[0] is sized by selectedRevealFeeRate
   // (the reveal budget) so the user pre-funds reveal at up to that rate.
   // When null, the builder falls back to the commit rate.
   const effectiveRevealRate = selectedRevealFeeRate ?? selectedFeeRate;
-  const estCost = estimateCost(
-    selectedFeeRate,
-    effectiveRevealRate,
-    hasInscription,
-    hasParent,
-    contentSize,
-  );
-
   const selectedList = utxos.filter((u) => u.selected);
+  const selectedTaprootInputs = selectedList.filter((u) => u.source === 'taproot').length;
+  const selectedSegwitInputs = selectedList.filter((u) => u.source === 'payment').length;
+  const costEstimate = estimateCommitFunding({
+    contentSize,
+    hasParent,
+    parentValue: parentInscription?.value,
+    commitFeeRate: selectedFeeRate,
+    revealFeeRate: effectiveRevealRate,
+    numTaprootInputs: selectedList.length > 0 ? selectedTaprootInputs : 0,
+    numSegwitInputs: selectedList.length > 0 ? selectedSegwitInputs : 1,
+    numCommitOutputs: 2,
+  });
+  const estCost = costEstimate.total;
   const totalSats = selectedList.reduce((acc, u) => acc + u.value, 0);
   const funded = totalSats >= estCost;
 
@@ -293,10 +236,19 @@ export default function UtxoSection() {
     }
   }
 
+  function CostRow({ label, value }: { label: string; value: number }) {
+    return (
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-gray-500">{label}</span>
+        <span className="font-mono text-gray-300">{value.toLocaleString()} sats</span>
+      </div>
+    );
+  }
+
   // Primary picker is only relevant when the etch will produce an inscription:
   // ord assigns the inscription to the first sat of vin 0, which is the primary UTXO.
   // For pure-rune etches the runestone is in OP_RETURN and sat ordering doesn't matter.
-  const willInscribe = !!inscriptionFile || !!delegateInscriptionId;
+  const willInscribe = productMode !== 'rune' && (!!inscriptionFile || !!delegateInscriptionId);
   const effectivePrimaryId = effectivePrimaryUtxoId();
 
   function renderUtxoRow(u: LabeledUtxo) {
@@ -436,6 +388,19 @@ export default function UtxoSection() {
             <span className="text-sm text-gray-400">Estimated cost</span>
             <span className="font-mono text-sm text-white font-semibold">~{estCost.toLocaleString()} sats</span>
           </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 border-t border-gray-800 pt-2 text-xs">
+            <CostRow label={`Reveal fee budget (${costEstimate.revealVBytes} vB @ ${effectiveRevealRate} sat/vB)`} value={costEstimate.revealFee} />
+            <CostRow label="Rune receiver dust" value={costEstimate.runeOutputValue} />
+            {costEstimate.parentReturnValue > 0 && (
+              <CostRow label="Parent pass-through return" value={costEstimate.parentReturnValue} />
+            )}
+            <CostRow label="Reveal change reserve" value={costEstimate.revealChangeReserve} />
+            <CostRow label={`Commit fee budget (${costEstimate.commitVBytes} vB est. @ ${selectedFeeRate} sat/vB)`} value={costEstimate.commitFee} />
+          </div>
+          <div className="flex items-center justify-between rounded border border-gray-800 bg-gray-950 px-3 py-2 text-xs">
+            <span className="text-gray-500">Commit output locked for reveal</span>
+            <span className="font-mono text-gray-300">{costEstimate.commitOutputValue.toLocaleString()} sats</span>
+          </div>
           {/* Funding progress bar */}
           {selectedList.length > 0 && (
             <div className="flex flex-col gap-1.5">
@@ -454,7 +419,7 @@ export default function UtxoSection() {
             </div>
           )}
           <p className="text-xs text-gray-600">
-            Includes commit fee + reveal fee + dust outputs. Actual cost may vary slightly.
+            The commit output is not a miner fee. It pre-funds the reveal with a safety buffer; unused reveal budget returns to your payment address as reveal change.
           </p>
         </div>
 

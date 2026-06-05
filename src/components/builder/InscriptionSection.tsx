@@ -53,6 +53,7 @@ const FILE_INPUT_ACCEPT = [
 ].join(',');
 
 export default function InscriptionSection() {
+  const productMode = useBuilderStore((s) => s.productMode);
   const inscriptionFile = useBuilderStore((s) => s.inscriptionFile);
   const setInscriptionFile = useBuilderStore((s) => s.setInscriptionFile);
   const delegateInscriptionId = useBuilderStore((s) => s.delegateInscriptionId);
@@ -251,6 +252,17 @@ export default function InscriptionSection() {
   return (
     <SectionWrapper sectionKey="inscription" title="Inscription" badge={badge}>
       <div className="flex flex-col gap-6">
+        {productMode === 'parent-child' && (
+          <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/5 px-4 py-3 text-xs text-yellow-200">
+            Parent Child mode creates a new child inscription. Pick file, text, or delegate content before committing.
+          </div>
+        )}
+        {productMode === 'rune-inscription' && (
+          <div className="rounded-lg border border-gray-700 bg-gray-900 px-4 py-3 text-xs text-gray-400">
+            This mode has no parent lineage. Any verified parent is cleared automatically when this mode is selected.
+          </div>
+        )}
+
         {/* Mode toggle */}
         <div className="flex gap-2">
           <button

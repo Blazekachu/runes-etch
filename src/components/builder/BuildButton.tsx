@@ -9,9 +9,12 @@ import { signPsbt } from '@/lib/wallet/xverse';
 import { broadcastTx, bitcoinNetworkForAddress } from '@/lib/api/mempool';
 import { getRuneNameStatus } from '@/lib/api/ordinals';
 import { VanityGrinder } from '@/lib/vanity/grinder';
+import { createCommitBundle, downloadBundle } from '@/lib/bundle/export';
 
 export default function BuildButton() {
   const etching = useBuilderStore((s) => s.etching);
+  const productMode = useBuilderStore((s) => s.productMode);
+  const isProductModeReady = useBuilderStore((s) => s.isProductModeReady);
   const wallet = useBuilderStore((s) => s.wallet);
   const inscriptionFile = useBuilderStore((s) => s.inscriptionFile);
   const delegateInscriptionId = useBuilderStore((s) => s.delegateInscriptionId);
@@ -27,6 +30,7 @@ export default function BuildButton() {
   const setPhase = useBuilderStore((s) => s.setPhase);
   const setCommitState = useBuilderStore((s) => s.setCommitState);
   const setCachedTapscript = useBuilderStore((s) => s.setCachedTapscript);
+  const setBundleDownloaded = useBuilderStore((s) => s.setBundleDownloaded);
   const orderedFundingUtxos = useBuilderStore((s) => s.orderedFundingUtxos);
   const utxos = useBuilderStore((s) => s.utxos);
   const getChangeAddress = useBuilderStore((s) => s.changeAddress);
@@ -73,12 +77,17 @@ export default function BuildButton() {
   // If the user entered a target but verification failed (not owned / wrong offset / not found),
   // refuse to build — the spec says: "show message and don't allow commit button to proceed".
   const targetBlocking = targetVerifyState === 'error';
+  const isTestnet =
+    wallet.taprootAddress.startsWith('tb1') ||
+    wallet.paymentAddress.startsWith('tb1');
 
+  const productReady = isProductModeReady();
   const canBuild =
     wallet.connected &&
     !!etching.runeName &&
     (selected.length > 0 || (targetUtxo && targetVerifyState === 'ok')) &&
     selectedFeeRate > 0 &&
+    productReady &&
     reinscribePrimaryValid &&
     !targetBlocking;
 
@@ -145,21 +154,52 @@ export default function BuildButton() {
     const finalTx = signedPsbt.extractTransaction();
     const txHex = finalTx.toHex();
     const txid = finalTx.getId();
+    const hasCommitVanity = commitVanityConfig.prefix.length > 0 || commitVanityConfig.suffix.length > 0;
+    if (hasCommitVanity) {
+      const prefix = commitVanityConfig.prefix;
+      const suffix = commitVanityConfig.suffix;
+      if ((prefix && !txid.startsWith(prefix)) || (suffix && !txid.endsWith(suffix))) {
+        throw new Error(`Final commit TXID ${txid} does not match the vanity target. Not broadcasting.`);
+      }
+    }
 
     await broadcastTx(txHex);
 
-    setCommitState({
+    const nextCommitState = {
       txid,
       rawHex: txHex,
       confirmations: 0,
       commitOutputIndex: result.commitOutputIndex,
       commitOutputValue: result.commitOutputValue,
       changeAddress: getChangeAddress(),
-    });
+    };
 
     const tapHex = Buffer.from(result.tapscript).toString('hex');
     const cbHex = Buffer.from(result.controlBlock).toString('hex');
     const pkHex = internalPubkey.toString('hex');
+
+    try {
+      const bundle = createCommitBundle({
+        commitState: nextCommitState,
+        runeName: etching.runeName,
+        tapscript: result.tapscript,
+        controlBlock: result.controlBlock,
+        internalPubkey: new Uint8Array(internalPubkey),
+        inscriptionFile: productMode !== 'rune' ? inscriptionFile : null,
+        delegateInscriptionId: productMode !== 'rune' ? delegateInscriptionId : null,
+        parentInscriptionId: productMode === 'parent-child' ? parentInscription?.inscriptionId ?? null : null,
+        etching,
+        taprootAddress: wallet.taprootAddress,
+        revealFeeRateBudget: selectedRevealFeeRate ?? undefined,
+      });
+      downloadBundle(bundle);
+      setBundleDownloaded(true);
+    } catch (err) {
+      console.error('[BuildButton] automatic bundle download failed:', err);
+      setBundleDownloaded(false);
+    }
+
+    setCommitState(nextCommitState);
     setCachedTapscript(tapHex, cbHex, pkHex);
 
     setPhase('waiting');
@@ -171,14 +211,14 @@ export default function BuildButton() {
     const fundingUtxos = buildFundingUtxos();
     const btcNetwork = bitcoinNetworkForAddress(wallet.taprootAddress);
 
-    const hasInscription = !!(inscriptionFile || delegateInscriptionId);
+    const hasInscription = productMode !== 'rune';
     const hasCommitVanity = commitVanityConfig.prefix.length > 0 || commitVanityConfig.suffix.length > 0;
 
     const commitParamsBase = {
       runeName: etching.runeName,
       inscriptionFile: hasInscription ? inscriptionFile : null,
       delegateId: hasInscription ? delegateInscriptionId : null,
-      parentInscription: hasInscription ? parentInscription : null,
+      parentInscription: productMode === 'parent-child' ? parentInscription : null,
       fundingUtxos,
       feeRate: selectedFeeRate,
       // When user picked a separate reveal budget, fund commit.vout[0] for it.
@@ -261,13 +301,14 @@ export default function BuildButton() {
       const nameStatus = await getRuneNameStatus(etching.runeName);
       if (nameStatus.state === 'taken') {
         throw new Error(
-          `Rune name "${etching.runeName}" has been taken. Do not broadcast.`
+          `Rune name "${etching.runeName}" is already etched. Commit is blocked because reveal would be a sure protocol failure. Mint it if terms are open, or buy it on secondary.`
         );
       }
       if (nameStatus.state === 'unknown') {
-        throw new Error(
-          `Indexer is ${nameStatus.behind} blocks behind chain tip (ord at ${nameStatus.indexerHeight}, tip at ${nameStatus.chainHeight}). Cannot confirm "${etching.runeName}" is still unused — wait for the indexer to catch up before broadcasting.`
-        );
+        const reason = isTestnet && nameStatus.reason === 'indexer-wedged'
+          ? `Local testnet4 ord is wedged on a reorg (ord at ${nameStatus.indexerHeight}, tip at ${nameStatus.chainHeight}).`
+          : `Indexer is ${nameStatus.behind} blocks behind chain tip (ord at ${nameStatus.indexerHeight}, tip at ${nameStatus.chainHeight}).`;
+        throw new Error(`${reason} Cannot confirm "${etching.runeName}" is still unused. Commit is blocked until the name check is trustworthy.`);
       }
 
       await handleCommitReveal();

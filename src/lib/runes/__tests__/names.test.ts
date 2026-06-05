@@ -233,6 +233,11 @@ describe('Rune name encoding', () => {
       const a6 = computeUnlockHeight('AAAAAA');
       expect(z6).toBeLessThan(a6);
     });
+    it('matches the earliest reveal block, not the block before it', () => {
+      expect(computeUnlockHeight('PUPPET')).toBe(951871);
+      expect(computeUnlockHeight('AAAAAA')).toBe(962500);
+      expect(computeUnlockHeight('A')).toBe(1050000);
+    });
   });
 
   // Finding #15 EXACT-MATCH VERIFIER — brute-force check that my function's

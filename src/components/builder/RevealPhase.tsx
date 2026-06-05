@@ -7,6 +7,8 @@ import { useBuilderStore } from '@/store/builderStore';
 import { buildRevealTx, serializeForTxid, computeTxid } from '@/lib/runes/reveal';
 import { buildTapscript, buildBareTapscript } from '@/lib/runes/inscription';
 import { runeNameToCommitmentBytes } from '@/lib/runes/names';
+import { formatLockedNameWarning, getRevealNameGate, type RevealNameGate } from '@/lib/runes/revealNameGate';
+import { canBroadcastRevealAtCurrentConfirmations, getFreshRevealNameGate, REVEAL_BROADCAST_CONFIRMATIONS } from '@/lib/runes/revealSafety';
 import { signPsbt, connectWallet, getActiveProvider } from '@/lib/wallet/xverse';
 import { broadcastTx, fetchFeeRates, getTxConfirmations, fetchUtxos, setMempoolNetwork, bitcoinNetworkForAddress } from '@/lib/api/mempool';
 import { getRuneNameStatus, setOrdinalsTestnet, resolveParentForReveal } from '@/lib/api/ordinals';
@@ -17,18 +19,23 @@ bitcoin.initEccLib(ecc);
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export default function RevealPhase(_props?: Record<string, unknown>) {
   const etching = useBuilderStore((s) => s.etching);
+  const productMode = useBuilderStore((s) => s.productMode);
   const wallet = useBuilderStore((s) => s.wallet);
   const commitState = useBuilderStore((s) => s.commitState);
   const parentInscription = useBuilderStore((s) => s.parentInscription);
   const inscriptionFile = useBuilderStore((s) => s.inscriptionFile);
   const delegateInscriptionId = useBuilderStore((s) => s.delegateInscriptionId);
-  const hasInscription = !!inscriptionFile || !!delegateInscriptionId;
+  const hasInscription = productMode !== 'rune';
+  const hasParent = productMode === 'parent-child';
   const vanityLocktime = useBuilderStore((s) => s.vanityLocktime);
+  const vanityConfig = useBuilderStore((s) => s.vanityConfig);
   const selectedFeeRate = useBuilderStore((s) => s.selectedFeeRate);
   const setSelectedFeeRate = useBuilderStore((s) => s.setSelectedFeeRate);
   const setWallet = useBuilderStore((s) => s.setWallet);
   const setRevealTxid = useBuilderStore((s) => s.setRevealTxid);
   const setPhase = useBuilderStore((s) => s.setPhase);
+  const currentBlockHeight = useBuilderStore((s) => s.currentBlockHeight);
+  const runeMinimum = useBuilderStore((s) => s.runeMinimum);
 
   const [reconnecting, setReconnecting] = useState(false);
   const broadcastingRef = useRef(false);
@@ -41,6 +48,8 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [highFeeConfirm, setHighFeeConfirm] = useState(false);
+  const [nameOverrideConfirm, setNameOverrideConfirm] = useState(false);
+  const [freshRevealNameGate, setFreshRevealNameGate] = useState<RevealNameGate | null>(null);
 
   // If vanity locktime was found, the fee rate is locked — changing it would
   // invalidate the grinded TXID. Only allow fee rate changes when no vanity.
@@ -103,6 +112,9 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
   }
 
   const needsReconnect = !wallet.publicKey;
+  const isTestnet =
+    wallet.taprootAddress.startsWith('tb1') ||
+    wallet.paymentAddress.startsWith('tb1');
 
   async function handleReveal() {
     // Double-broadcast guard (ref-based)
@@ -122,23 +134,45 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
     broadcastingRef.current = true;
     setLoading(true);
     setError(null);
+    const revealNameGate = await getFreshRevealNameGate({
+      runeName: etching.runeName,
+      isTestnet,
+      fallbackBlockHeight: currentBlockHeight,
+      fallbackRuneMinimum: runeMinimum,
+    });
+    setFreshRevealNameGate(revealNameGate);
 
     try {
+      if (revealNameGate.status === 'invalid') {
+        throw new Error(revealNameGate.message);
+      }
+      if (revealNameGate.status === 'locked' && !nameOverrideConfirm) {
+        setNameOverrideConfirm(true);
+        setLoading(false);
+        broadcastingRef.current = false;
+        return;
+      }
+
       // C1: Re-check name availability before reveal broadcast. #10 — block on
       // 'unknown' (indexer lag) with distinct message so user knows to wait
       // rather than thinking the name was stolen.
       const nameStatus = await getRuneNameStatus(etching.runeName);
-      if (nameStatus.state === 'taken') {
-        throw new Error(`Rune name "${etching.runeName}" has been taken. Broadcasting would produce a cenotaph. Your commit funds can be recovered via the tapscript.`);
-      }
       if (nameStatus.state === 'unknown') {
-        throw new Error(`Indexer is ${nameStatus.behind} blocks behind chain tip (ord at ${nameStatus.indexerHeight}, tip at ${nameStatus.chainHeight}). Cannot confirm "${etching.runeName}" is still unused — wait for the indexer to catch up before broadcasting the reveal.`);
+        const reason = isTestnet && nameStatus.reason === 'indexer-wedged'
+          ? `Local testnet4 ord is wedged on a reorg (ord at ${nameStatus.indexerHeight}, tip at ${nameStatus.chainHeight}).`
+          : `Indexer is ${nameStatus.behind} blocks behind chain tip (ord at ${nameStatus.indexerHeight}, tip at ${nameStatus.chainHeight}).`;
+        throw new Error(`${reason} Cannot confirm "${etching.runeName}" is still unused. Wait until the name check is trustworthy before broadcasting the reveal.`);
+      }
+      if (nameStatus.state === 'taken') {
+        throw new Error(`Rune name "${etching.runeName}" is already etched. Reveal is blocked because this is a sure protocol failure. Mint it if terms are open, or buy it on secondary.`);
       }
 
-      // H-5: Re-verify commit TX has 6 confirmations before building reveal
+      // H-5: Re-verify commit TX can be revealed safely before building reveal.
+      // A reveal broadcast at 5 current confirmations can only mine in the next
+      // block, where the commit reaches ord's 6-confirmation requirement.
       const confirmations = await getTxConfirmations(commitState.txid);
-      if (confirmations < 6) {
-        throw new Error(`Commit TX only has ${confirmations}/6 confirmations. Please wait.`);
+      if (!canBroadcastRevealAtCurrentConfirmations(confirmations)) {
+        throw new Error(`Commit TX only has ${confirmations}/${REVEAL_BROADCAST_CONFIRMATIONS} confirmations. Please wait.`);
       }
 
       // Parent re-resolution: re-resolve the parent inscription's CURRENT UTXO — it may
@@ -146,7 +180,7 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
       // testnet this uses the local ord. Spending a stale/genesis outpoint is exactly what
       // caused #12 (reveal failed `bad-txns-inputs-missingorspent`), so never skip it.
       let resolvedParent = parentInscription;
-      if (hasInscription && parentInscription) {
+      if (hasParent && parentInscription) {
         const parentResult = await resolveParentForReveal(
           parentInscription.inscriptionId,
           wallet.taprootAddress
@@ -194,7 +228,7 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
         tapscript = buildTapscript(internalPubkey, {
           contentType: currentInscriptionFile.contentType,
           body: currentInscriptionFile.body,
-          parentId: resolvedParent?.inscriptionId ?? null,
+          parentId: hasParent ? resolvedParent?.inscriptionId ?? null : null,
           delegateId: delegateInscriptionId,
           runeCommitment,
         });
@@ -212,7 +246,7 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
         tapscript = buildTapscript(internalPubkey, {
           contentType: '',
           body: new Uint8Array(0),
-          parentId: resolvedParent?.inscriptionId ?? null,
+          parentId: hasParent ? resolvedParent?.inscriptionId ?? null : null,
           delegateId: delegateInscriptionId,
           runeCommitment,
         });
@@ -261,7 +295,7 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
         controlBlock,
         internalPubkey,
         hasInscription,
-        parentInscription: hasInscription ? resolvedParent : null,
+        parentInscription: hasParent ? resolvedParent : null,
         additionalFundingUtxos: [],
         feeRate: selectedFeeRate,
         receiverAddress: wallet.taprootAddress,
@@ -296,6 +330,13 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
       const finalTx = signedPsbt.extractTransaction();
       const txHex = finalTx.toHex();
       const txid = finalTx.getId();
+      if (hasVanityLocktime) {
+        const prefix = vanityConfig.prefix;
+        const suffix = vanityConfig.suffix;
+        if ((prefix && !txid.startsWith(prefix)) || (suffix && !txid.endsWith(suffix))) {
+          throw new Error(`Final reveal TXID ${txid} does not match the locked vanity target. Not broadcasting. Change the reveal fee to re-grind, or skip reveal vanity.`);
+        }
+      }
 
       await broadcastTx(txHex);
       setRevealTxid(txid);
@@ -314,6 +355,13 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
         ? 'border-orange-500 bg-orange-500/10 text-orange-400'
         : 'border-gray-700 bg-gray-900 text-gray-400 hover:border-gray-600 hover:text-white'
     }`;
+  const currentRevealNameGate = getRevealNameGate({
+    runeName: etching.runeName,
+    currentBlockHeight,
+    isTestnet,
+    runeMinimum,
+  });
+  const visibleRevealNameGate = freshRevealNameGate ?? currentRevealNameGate;
 
   return (
     <div className="flex flex-col gap-8 py-8 max-w-xl mx-auto w-full">
@@ -417,6 +465,17 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
               Yes, Broadcast
             </button>
           </div>
+        </div>
+      )}
+
+      {nameOverrideConfirm && visibleRevealNameGate.status === 'locked' && (
+        <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 flex flex-col gap-3">
+          <p className="text-sm text-red-300">
+            {formatLockedNameWarning(visibleRevealNameGate)}
+          </p>
+          <p className="text-xs text-red-300/80">
+            Click Sign & Broadcast Reveal again only if you accept the protocol outcome.
+          </p>
         </div>
       )}
 

@@ -4,7 +4,7 @@ import type {
   BuildPhase, WalletState, RuneEtching, RuneTerms,
   InscriptionFile, ParentInscription, LabeledUtxo,
   VanityConfig, VanityProgress, CommitTxState, FeeRates, CommitBundle,
-  UtxoSatInfo, SatRarity,
+  UtxoSatInfo, SatRarity, ProductMode,
 } from '@/types';
 
 /** Tier ranking for auto-primary fallback — picks rarer over more-common when no explicit primary. */
@@ -97,6 +97,11 @@ export function detectEtchMode(params: {
 // --- Store interface ---
 
 interface BuilderStore {
+  // Product mode: the only three rune etch products this app supports.
+  productMode: ProductMode;
+  setProductMode: (mode: ProductMode) => void;
+  isProductModeReady: () => boolean;
+
   // Phase
   phase: BuildPhase;
   setPhase: (phase: BuildPhase) => void;
@@ -278,6 +283,7 @@ const defaultVanityProgress: VanityProgress = {
 };
 
 const defaultOpenSections: Record<string, boolean> = {
+  'mode': true,
   'rune-details': true,
   'fee-rate': true,
   'mint-terms': false,
@@ -292,6 +298,38 @@ const defaultOpenSections: Record<string, boolean> = {
 export const useBuilderStore = create<BuilderStore>()(
   persist(
     (set, get) => ({
+      productMode: 'rune' as ProductMode,
+      setProductMode: (mode) => set((state) => {
+        if (state.commitState) return {};
+        if (mode === 'parent-child') return { productMode: mode };
+        if (mode === 'rune-inscription') {
+          return {
+            productMode: mode,
+            parentInscription: null,
+            pendingParentId: null,
+          };
+        }
+        return {
+          productMode: mode,
+          inscriptionFile: null,
+          delegateInscriptionId: null,
+          parentInscription: null,
+          pendingParentId: null,
+          reinscribeMode: false,
+          targetInput: '',
+          targetUtxo: null,
+          targetVerifyState: 'idle' as const,
+          targetVerifyError: '',
+        };
+      }),
+      isProductModeReady: () => {
+        const s = get();
+        const hasChild = !!s.inscriptionFile || !!s.delegateInscriptionId;
+        if (s.productMode === 'parent-child') return hasChild && !!s.parentInscription;
+        if (s.productMode === 'rune-inscription') return hasChild;
+        return !hasChild && !s.parentInscription && !s.pendingParentId;
+      },
+
       phase: 'building' as BuildPhase,
       setPhase: (phase) => set({ phase }),
 
@@ -506,7 +544,14 @@ export const useBuilderStore = create<BuilderStore>()(
           inscriptionFile = { contentType: bundle.inscriptionFile.contentType, body };
         }
 
+        const productMode: ProductMode = bundle.parentInscriptionId
+          ? 'parent-child'
+          : (bundle.inscriptionFile || bundle.delegateInscriptionId)
+            ? 'rune-inscription'
+            : 'rune';
+
         set({
+          productMode,
           phase: 'waiting',
           detectedMode: 'commit-reveal',
           detectedReason: 'Resumed from commit bundle',
@@ -561,6 +606,7 @@ export const useBuilderStore = create<BuilderStore>()(
       },
 
       reset: () => set({
+        productMode: 'rune',
         phase: 'building',
         openSections: { ...defaultOpenSections },
         detectedMode: 'commit-reveal',
@@ -614,6 +660,7 @@ export const useBuilderStore = create<BuilderStore>()(
         }
       },
       partialize: (state) => ({
+        productMode: state.productMode,
         phase: state.phase,
         openSections: state.openSections,
         detectedMode: state.detectedMode,
@@ -641,6 +688,7 @@ export const useBuilderStore = create<BuilderStore>()(
         commitVanityLocktime: state.commitVanityLocktime,
         selectedFeeRate: state.selectedFeeRate,
         selectedRevealFeeRate: state.selectedRevealFeeRate,
+        bundleDownloaded: state.bundleDownloaded,
         cachedTapscriptHex: state.cachedTapscriptHex,
         cachedControlBlockHex: state.cachedControlBlockHex,
         cachedInternalPubkeyHex: state.cachedInternalPubkeyHex,

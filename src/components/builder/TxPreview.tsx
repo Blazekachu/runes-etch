@@ -4,8 +4,7 @@ import { useBuilderStore } from '@/store/builderStore';
 
 export default function TxPreview() {
   const etching = useBuilderStore((s) => s.etching);
-  const inscriptionFile = useBuilderStore((s) => s.inscriptionFile);
-  const delegateInscriptionId = useBuilderStore((s) => s.delegateInscriptionId);
+  const productMode = useBuilderStore((s) => s.productMode);
   const parentInscription = useBuilderStore((s) => s.parentInscription);
   const detectedReason = useBuilderStore((s) => s.detectedReason);
   // Subscribe to `utxos` (the data), not the selectedUtxos() selector fn — the fn ref
@@ -15,8 +14,7 @@ export default function TxPreview() {
 
   const selected = utxos.filter((u) => u.selected);
   const totalIn = selected.reduce((acc, u) => acc + u.value, 0);
-  const hasInscription = !!inscriptionFile || !!delegateInscriptionId;
-  const hasParent = !!parentInscription;
+  const hasParent = productMode === 'parent-child' && !!parentInscription;
 
   if (!etching.runeName) return null;
 
@@ -25,7 +23,7 @@ export default function TxPreview() {
     outputs.push({ label: 'Rune dust (546 sats)', dest: 'taproot' });
   }
   if (hasParent) {
-    outputs.push({ label: 'Parent return (546 sats)', dest: 'taproot' });
+    outputs.push({ label: `Parent return (${parentInscription.value.toLocaleString()} sats)`, dest: 'taproot' });
   }
   outputs.push({ label: 'OP_RETURN runestone', dest: 'script' });
   outputs.push({ label: 'Change', dest: 'payment' });
@@ -35,7 +33,11 @@ export default function TxPreview() {
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium text-gray-300">TX Preview</p>
         <span className="text-xs font-semibold px-2 py-0.5 rounded bg-orange-500/20 text-orange-400">
-          Commit-Reveal
+          {productMode === 'parent-child'
+            ? 'Parent Child'
+            : productMode === 'rune-inscription'
+              ? 'Rune With Inscription'
+              : 'Rune'}
         </span>
       </div>
       <p className="text-xs text-gray-500">{detectedReason}</p>

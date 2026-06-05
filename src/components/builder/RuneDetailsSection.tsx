@@ -44,7 +44,7 @@ export default function RuneDetailsSection() {
   const [availabilityMsg, setAvailabilityMsg] = useState('');
   const [nameError, setNameError] = useState('');
   /** Projected block height at which a below-minimum name will unlock for
-   *  quick-etch. Set by validateRuneName when name is below the chain's
+   *  reveal. Set by validateRuneName when name is below the chain's
    *  current minimum. Used to advise the user when to broadcast the reveal
    *  if they commit now. (Finding #15) */
   const [nameUnlockHeight, setNameUnlockHeight] = useState<number | null>(null);
@@ -69,7 +69,7 @@ export default function RuneDetailsSection() {
     (async () => {
       if (cancelled) return;
       await loadBlockHeight();
-      // #11: fetch the chain's authoritative rune-name minimum so quick-etch
+      // #11: fetch the chain's authoritative rune-name minimum so the builder
       // can reject below-minimum names on testnet4 (and any chain) before
       // broadcasting a TX that ord would silently cenotaph.
       if (cancelled) return;
@@ -159,7 +159,10 @@ export default function RuneDetailsSection() {
     if (!validation.valid) {
       setNameError(validation.error);
       setNameUnlockHeight(validation.unlockHeight ?? null);
-      return;
+      const locked = validation.unlockHeight !== undefined ||
+        validation.error.includes('minimum') ||
+        validation.error.includes('unlocks at block');
+      if (!locked) return;
     }
     setChecking(true);
     setAvailability(null);
@@ -167,7 +170,7 @@ export default function RuneDetailsSection() {
       const status = await getRuneNameStatus(runeName);
       if (status.state === 'available') {
         setAvailability('available');
-        setAvailabilityMsg('Name is available!');
+        setAvailabilityMsg(nameError ? 'Name is not etched yet. You can commit now, but reveal must wait until protocol unlock unless you intentionally override.' : 'Name is available!');
       } else if (status.state === 'taken') {
         setAvailability('taken');
         setAvailabilityMsg('Name is already taken.');
@@ -209,6 +212,11 @@ export default function RuneDetailsSection() {
   }
 
   const letters = [...runeName];
+  const lockedNameWarning = !!nameError && (
+    nameUnlockHeight !== null ||
+    nameError.includes('minimum') ||
+    nameError.includes('unlocks at block')
+  );
 
   return (
     <SectionWrapper
@@ -234,7 +242,7 @@ export default function RuneDetailsSection() {
             />
             <button
               onClick={handleCheck}
-              disabled={checking || !runeName || !!nameError}
+              disabled={checking || !runeName || (!!nameError && !lockedNameWarning)}
               className="rounded-lg border border-orange-500 px-4 py-2.5 text-sm font-semibold text-orange-500 hover:bg-orange-500 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               {checking ? 'Checking…' : 'Check'}

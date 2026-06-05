@@ -2,24 +2,23 @@
 
 **Self-custodial Bitcoin Runes etching tool.** Web-based, client-side only, no backend. Etch new runes on Bitcoin mainnet or testnet4 with vanity TXID grinding, parent inscriptions, and bundle recovery — without ever giving up your keys.
 
-> Status: testnet4-validated across all 4 modes · 5 security audits · 57 tests passing · production-ready
+> Status: v2 three-mode flow in progress · 5 security audits · 139 tests passing · testnet4 re-validation pending
 
 ---
 
 ## Features
 
-### Four Etching Modes
+### Three Etching Modes
 
 | Mode | What it does | Front-run protection |
 |---|---|---|
-| **Quick** | Single-TX rune etch — fastest, simplest | None (mempool visible) |
-| **No-inscription** | Commit-reveal etch with name commitment, no inscription | Name protected via tapscript |
-| **No-parent** | Commit-reveal with inscription, no parent | Name + inscription protected |
-| **Full** | Commit-reveal with inscription **and** parent (child-of) | Name + inscription + parent |
+| **Parent Child** | Commit-reveal rune etch with a new child inscription linked to a parent inscription. Child content can be file, text, or delegate. | Name + child inscription + parent |
+| **Rune With Inscription** | Commit-reveal rune etch with file, text, or delegate inscription content and no parent lineage. | Name + inscription |
+| **Rune** | Commit-reveal rune etch with rune name, supply, mint terms, turbo, and no inscription or parent. | Name |
 
 ### Vanity TXID Grinding
 
-Grind your etch TXID to start (or end) with chosen hex characters. Works in **all 4 modes**.
+Grind your etch TXID to start (or end) with chosen hex characters. Works in all three modes.
 
 - Up to 6 hex characters (~16M attempts at 8 chars = practical ceiling)
 - Web Worker grinder — UI stays responsive
@@ -90,14 +89,6 @@ COMMIT-REVEAL MODE (no-inscription / no-parent / full)
                                    |  parent)    |
                                    +-------------+
 
-QUICK MODE
-+--------+      +------------+
-| User   | ---> | SINGLE TX  |
-| signs  |      | (rune +    |
-| PSBT   |      |  runestone)|
-+--------+      +------------+
-```
-
 All transaction building happens in the browser using `bitcoinjs-lib`. Private keys live exclusively in the wallet extension and never reach the page.
 
 ---
@@ -123,7 +114,7 @@ Auto-detects testnet from the wallet's address prefix (`tb1`). Adjustments on te
 - `ordinals.com` checks skipped (mainnet-only API), uses mempool instead
 - Leather returns segwit only on testnet — app handles gracefully
 
-All 4 modes have been etched and confirmed on testnet4.
+The current v2 three-mode flow is being prepared for a fresh testnet4 validation pass.
 
 ---
 
@@ -155,9 +146,9 @@ See [`SECURITY.md`](./SECURITY.md) for the full security model, guarantees, acce
 ```
 runes-etch/
 ├── src/
-│   ├── app/          Next.js routes — /etch is the main flow
+│   ├── app/          Next.js routes — / is the main v2 flow
 │   ├── components/
-│   │   └── wizard/   Step-by-step etching wizard (6–9 steps per mode)
+│   │   └── builder/  Three-mode etching builder
 │   ├── lib/
 │   │   ├── api/      mempool.space + ordinals.com clients
 │   │   ├── bundle/   Bundle export/import for recovery
@@ -170,7 +161,7 @@ runes-etch/
 └── LICENSE           MIT
 ```
 
-A v2 single-page builder is under active development on the [`feat/etch-v2`](../../tree/feat/etch-v2) branch.
+The old wizard flow has been retired; the v2 builder is the standalone app surface.
 
 ---
 

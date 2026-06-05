@@ -6,6 +6,7 @@ import { parseBundle } from '@/lib/bundle/import';
 
 import WalletHeader from '@/components/builder/WalletHeader';
 import OrdHealthBanner from '@/components/builder/OrdHealthBanner';
+import ModeSection from '@/components/builder/ModeSection';
 import RuneDetailsSection from '@/components/builder/RuneDetailsSection';
 import SupplyMintSection from '@/components/builder/SupplyMintSection';
 import InscriptionSection from '@/components/builder/InscriptionSection';
@@ -23,6 +24,7 @@ import CompletePhase from '@/components/builder/CompletePhase';
 export default function EtchV2Page() {
   const phase = useBuilderStore((s) => s.phase);
   const wallet = useBuilderStore((s) => s.wallet);
+  const productMode = useBuilderStore((s) => s.productMode);
   const etching = useBuilderStore((s) => s.etching);
   const inscriptionFile = useBuilderStore((s) => s.inscriptionFile);
   const delegateInscriptionId = useBuilderStore((s) => s.delegateInscriptionId);
@@ -101,12 +103,13 @@ export default function EtchV2Page() {
 
       {/* Builder sections */}
       <main className="max-w-3xl mx-auto px-6 py-6 flex flex-col gap-4">
+        <ModeSection />
         <RuneDetailsSection />
         <SupplyMintSection />
-        <InscriptionSection />
-        <ParentSection />
+        {productMode !== 'rune' && <InscriptionSection />}
+        {productMode === 'parent-child' && <ParentSection />}
         <VanitySection />
-        <SatTargetSection />
+        {productMode !== 'rune' && <SatTargetSection />}
         <UtxoSection />
         <FeeRateSection />
 

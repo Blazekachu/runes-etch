@@ -2,9 +2,6 @@
  * Generic Bitcoin transaction vsize estimator (BIP-141 witness discount).
  * Used by the UTXO cost preview to size the commit + reveal transactions.
  * Network-agnostic and not tied to any etch mode.
- *
- * (Extracted from the former quickEtch.ts when single-TX "quick" etch was removed —
- * the estimator itself was always generic; only its name carried "QuickEtch".)
  */
 export type EstimatorInput = { type: 'p2wpkh' } | { type: 'p2tr' };
 export type EstimatorOutput =

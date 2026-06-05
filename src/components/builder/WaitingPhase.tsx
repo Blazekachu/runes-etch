@@ -10,6 +10,8 @@ import { buildTapscript, buildBareTapscript } from '@/lib/runes/inscription';
 import { runeNameToCommitmentBytes } from '@/lib/runes/names';
 import { buildRevealTx, serializeForTxid } from '@/lib/runes/reveal';
 import { resolveParentInscription } from '@/lib/runes/resolveParent';
+import { formatLockedNameWarning, getRevealNameGate } from '@/lib/runes/revealNameGate';
+import { REVEAL_BROADCAST_CONFIRMATIONS } from '@/lib/runes/revealSafety';
 import { VanityGrinder } from '@/lib/vanity/grinder';
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
@@ -24,7 +26,7 @@ bitcoin.initEccLib(ecc);
 // Real mainnet etches land exactly here, e.g. BITCOIN INSCRIBED PHALLUS: commit @840295,
 // reveal @840300 = 6 confs at the reveal block. (Was 6, which made the reveal land at 7
 // — one block more conservative than the protocol requires.)
-const REQUIRED_CONFIRMATIONS = 5;
+const REQUIRED_CONFIRMATIONS = REVEAL_BROADCAST_CONFIRMATIONS;
 const POLL_INTERVAL_MS = 15_000;
 function mempoolTxUrl(address: string): string {
   if (address.startsWith('tb1') || address.startsWith('2') || address.startsWith('m') || address.startsWith('n')) {
@@ -39,6 +41,7 @@ export default function WaitingPhase() {
   const vanityConfig = useBuilderStore((s) => s.vanityConfig);
   const setVanityConfig = useBuilderStore((s) => s.setVanityConfig);
   const vanityProgress = useBuilderStore((s) => s.vanityProgress);
+  const productMode = useBuilderStore((s) => s.productMode);
   const etching = useBuilderStore((s) => s.etching);
   const wallet = useBuilderStore((s) => s.wallet);
   const inscriptionFile = useBuilderStore((s) => s.inscriptionFile);
@@ -57,9 +60,11 @@ export default function WaitingPhase() {
   const feeRatesFromStore = useBuilderStore((s) => s.feeRates);
   const setFeeRatesStore = useBuilderStore((s) => s.setFeeRates);
   const setWallet = useBuilderStore((s) => s.setWallet);
+  const currentBlockHeight = useBuilderStore((s) => s.currentBlockHeight);
+  const runeMinimum = useBuilderStore((s) => s.runeMinimum);
 
-  // hasInscription: determined from store state, not etchMode
-  const hasInscription = !!useBuilderStore.getState().inscriptionFile || !!useBuilderStore.getState().delegateInscriptionId;
+  const hasInscription = productMode !== 'rune';
+  const hasParent = productMode === 'parent-child';
 
   const cachedTapscriptHex = useBuilderStore((s) => s.cachedTapscriptHex);
   const cachedControlBlockHex = useBuilderStore((s) => s.cachedControlBlockHex);
@@ -78,6 +83,7 @@ export default function WaitingPhase() {
   const [feeMode, setFeeMode] = useState<'economy' | 'normal' | 'fast' | 'custom'>('normal');
   const [customRate, setCustomRate] = useState('');
   const [loadingFees, setLoadingFees] = useState(false);
+  const [nameRevealOverride, setNameRevealOverride] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const grinderRef = useRef<VanityGrinder | null>(null);
   const grindStartedRef = useRef(false);
@@ -96,6 +102,7 @@ export default function WaitingPhase() {
   // re-fetch its live UTXO) and BLOCK the reveal until it succeeds.
   const reResolveParent = useCallback(async () => {
     const pid = useBuilderStore.getState().pendingParentId;
+    if (useBuilderStore.getState().productMode !== 'parent-child') return;
     if (!pid || useBuilderStore.getState().parentInscription || !wallet.connected) return;
     setResolvingParent(true);
     setParentResolveError(null);
@@ -115,9 +122,23 @@ export default function WaitingPhase() {
   }, [pendingParentId, parentInscription, wallet.connected, reResolveParent]);
 
   // A parent committed-to but not yet re-resolved must block the reveal (else the linkage drops).
-  const parentPending = !!pendingParentId && !parentInscription;
+  const parentPending = hasParent && !!pendingParentId && !parentInscription;
+  const revealNameGate = getRevealNameGate({
+    runeName: etching.runeName,
+    currentBlockHeight,
+    isTestnet: wallet.taprootAddress.startsWith('tb1') || wallet.paymentAddress.startsWith('tb1'),
+    runeMinimum,
+  });
+  const revealNameLocked = revealNameGate.status === 'locked';
+  const revealNameInvalid = revealNameGate.status === 'invalid';
 
-  const canProceed = confirmations >= REQUIRED_CONFIRMATIONS && vanityReady && !needsReconnect && !parentPending;
+  const canProceed =
+    confirmations >= REQUIRED_CONFIRMATIONS &&
+    vanityReady &&
+    !needsReconnect &&
+    !parentPending &&
+    !revealNameInvalid &&
+    (!revealNameLocked || nameRevealOverride);
 
   // Estimated blocks remaining and time
   const blocksRemaining = Math.max(0, REQUIRED_CONFIRMATIONS - confirmations);
@@ -184,7 +205,7 @@ export default function WaitingPhase() {
           tapscript = buildTapscript(internalPubkey, {
             contentType: inscriptionFile?.contentType ?? '',
             body: inscriptionFile?.body ?? new Uint8Array(0),
-            parentId: parentInscription?.inscriptionId ?? null,
+            parentId: hasParent ? parentInscription?.inscriptionId ?? null : null,
             delegateId: delegateInscriptionId,
             runeCommitment,
           });
@@ -207,7 +228,7 @@ export default function WaitingPhase() {
         const { psbt } = buildRevealTx({
           etching, commitState, tapscript, controlBlock, internalPubkey,
           hasInscription,
-          parentInscription: hasInscription ? parentInscription : null,
+          parentInscription: hasParent ? parentInscription : null,
           additionalFundingUtxos: [],
           feeRate: selectedFeeRate,
           receiverAddress: wallet.taprootAddress,
@@ -234,7 +255,7 @@ export default function WaitingPhase() {
       const { psbt } = buildRevealTx({
         etching, commitState, tapscript, controlBlock, internalPubkey,
         hasInscription,
-        parentInscription: hasInscription ? parentInscription : null,
+        parentInscription: hasParent ? parentInscription : null,
         additionalFundingUtxos: [],
         feeRate: selectedFeeRate,
         receiverAddress: wallet.taprootAddress,
@@ -296,9 +317,9 @@ export default function WaitingPhase() {
     return () => {
       grinder.stop();
       grinderRef.current = null;
+      grindStartedRef.current = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasVanity, vanityProgress.found, vanitySkipped, commitState?.txid, wallet.publicKey, vanityConfig.prefix, vanityConfig.suffix, selectedFeeRate]);
+  }, [hasVanity, vanityProgress.found, vanitySkipped, commitState?.txid, wallet.publicKey, vanityConfig, selectedFeeRate, buildTxTemplate, setVanityProgress, setVanityLocktime]);
 
   async function handleReconnect() {
     setReconnecting(true);
@@ -372,7 +393,7 @@ export default function WaitingPhase() {
         tapscript = buildTapscript(internalPubkey, {
           contentType: inscriptionFile?.contentType ?? '',
           body: inscriptionFile?.body ?? new Uint8Array(0),
-          parentId: parentInscription?.inscriptionId ?? null,
+          parentId: hasParent ? parentInscription?.inscriptionId ?? null : null,
           delegateId: delegateInscriptionId,
           runeCommitment,
         });
@@ -400,7 +421,7 @@ export default function WaitingPhase() {
         internalPubkey: new Uint8Array(internalPubkey),
         inscriptionFile: hasInscription ? inscriptionFile : null,
         delegateInscriptionId: delegateInscriptionId,
-        parentInscriptionId: parentInscription?.inscriptionId ?? null,
+        parentInscriptionId: hasParent ? parentInscription?.inscriptionId ?? null : null,
         etching,
         taprootAddress: wallet.taprootAddress,
         revealFeeRateBudget: selectedRevealFeeRate ?? undefined,
@@ -517,8 +538,8 @@ export default function WaitingPhase() {
         <div className="flex flex-col gap-3 rounded-lg border border-gray-800 bg-gray-900 p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-300">Vanity TXID <span className="text-gray-500 font-normal">(optional)</span></p>
-              <p className="text-xs text-gray-500 mt-1">Hex only (0-9, a-f). Max 6 total. Grinding starts automatically.</p>
+              <p className="text-sm font-medium text-gray-300">Reveal TXID Vanity <span className="text-gray-500 font-normal">(optional)</span></p>
+              <p className="text-xs text-gray-500 mt-1">Applies only to the reveal TXID. Hex only (0-9, a-f). Max 6 total. Grinding starts automatically.</p>
             </div>
             {hasVanity && (
               <button
@@ -545,6 +566,7 @@ export default function WaitingPhase() {
                     setVanityConfig({ ...vanityConfig, prefix: clean.slice(0, Math.max(0, maxLen)) });
                     setVanityProgress({ attempts: 0, speed: 0, bestMatch: '', found: false, nonce: null });
                     setVanityLocktime(null);
+                    setVanitySkipped(false);
                     grindStartedRef.current = false;
                   }}
                   placeholder="dead"
@@ -563,6 +585,7 @@ export default function WaitingPhase() {
                     setVanityConfig({ ...vanityConfig, suffix: clean.slice(0, Math.max(0, maxLen)) });
                     setVanityProgress({ attempts: 0, speed: 0, bestMatch: '', found: false, nonce: null });
                     setVanityLocktime(null);
+                    setVanitySkipped(false);
                     grindStartedRef.current = false;
                   }}
                   placeholder="cafe"
@@ -574,11 +597,16 @@ export default function WaitingPhase() {
 
           {/* Grinding progress — shows inline when vanity is set */}
           {hasVanity && vanityProgress.found && (
-            <div className="flex items-center gap-2 text-sm text-green-400 font-medium">
-              <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-              Vanity nonce found!
+            <div className="flex flex-col gap-1 rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-2">
+              <div className="flex items-center gap-2 text-sm text-green-400 font-medium">
+                <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                Reveal vanity nonce found
+              </div>
+              {vanityProgress.bestMatch && (
+                <p className="font-mono text-xs text-green-300 break-all">{vanityProgress.bestMatch}</p>
+              )}
             </div>
           )}
 
@@ -689,8 +717,20 @@ export default function WaitingPhase() {
       )}
 
       {vanitySkipped && hasVanity && (
-        <div className="rounded-lg border border-gray-700 bg-gray-900 px-4 py-3 text-sm text-gray-400">
-          Vanity grinding skipped. A random nonce will be used.
+        <div className="rounded-lg border border-gray-700 bg-gray-900 px-4 py-3 text-sm text-gray-400 flex flex-col gap-3">
+          <span>Vanity grinding skipped. A random nonce will be used.</span>
+          <button
+            type="button"
+            onClick={() => {
+              setVanitySkipped(false);
+              setVanityProgress({ attempts: 0, speed: 0, bestMatch: '', found: false, nonce: null });
+              setVanityLocktime(null);
+              grindStartedRef.current = false;
+            }}
+            className="self-start rounded-lg border border-gray-600 px-3 py-1.5 text-xs font-semibold text-gray-300 hover:border-orange-500 hover:text-orange-400 transition-colors"
+          >
+            Use vanity instead
+          </button>
         </div>
       )}
 
@@ -736,6 +776,31 @@ export default function WaitingPhase() {
         </div>
       )}
 
+      {revealNameInvalid && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+          {revealNameGate.status === 'invalid' ? revealNameGate.message : 'Rune name is invalid.'}
+        </div>
+      )}
+
+      {revealNameLocked && !nameRevealOverride && revealNameGate.status === 'locked' && (
+        <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-300 flex flex-col gap-3">
+          <p>{formatLockedNameWarning(revealNameGate)}</p>
+          <button
+            type="button"
+            onClick={() => setNameRevealOverride(true)}
+            className="self-start rounded-lg border border-yellow-400 px-3 py-1.5 text-xs font-semibold text-yellow-200 hover:bg-yellow-400 hover:text-gray-950 transition-colors"
+          >
+            Override: reveal before unlock
+          </button>
+        </div>
+      )}
+
+      {revealNameLocked && nameRevealOverride && (
+        <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          Override enabled. Broadcasting before the name unlocks may create a cenotaph; protocol outcome is your choice.
+        </div>
+      )}
+
       {/* Proceed button */}
       <div className="pt-2">
         <button
@@ -747,6 +812,10 @@ export default function WaitingPhase() {
             ? 'Proceed to Reveal'
             : parentPending
               ? (resolvingParent ? 'Verifying parent\u2026' : 'Parent inscription required')
+              : revealNameInvalid
+                ? 'Rune name invalid'
+                : revealNameLocked && !nameRevealOverride
+                  ? 'Name locked until protocol unlock'
               : `Waiting\u2026 (${confirmations}/${REQUIRED_CONFIRMATIONS} confirmations)`}
         </button>
       </div>

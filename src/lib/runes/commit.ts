@@ -55,6 +55,56 @@ export interface CommitTxResult {
   dustChange: number; // sats lost to miners if change < dust limit (0 if no loss)
 }
 
+export interface CommitFundingEstimate {
+  revealVBytes: number;
+  revealFee: number;
+  runeOutputValue: number;
+  parentReturnValue: number;
+  revealChangeReserve: number;
+  commitOutputValue: number;
+  commitVBytes: number;
+  commitFee: number;
+  total: number;
+}
+
+export interface CommitFundingEstimateParams {
+  contentSize: number;
+  hasParent: boolean;
+  parentValue?: number;
+  commitFeeRate: number;
+  revealFeeRate: number;
+  numTaprootInputs: number;
+  numSegwitInputs: number;
+  numCommitOutputs?: number;
+}
+
+export function estimateCommitFunding(params: CommitFundingEstimateParams): CommitFundingEstimate {
+  const revealVBytes = estimateRevealVBytes(params.contentSize, true, params.hasParent);
+  const revealFee = Math.ceil(revealVBytes * params.revealFeeRate);
+  const runeOutputValue = Number(DUST_LIMIT);
+  const parentReturnValue = params.hasParent ? params.parentValue ?? Number(DUST_LIMIT) : 0;
+  const revealChangeReserve = Number(DUST_LIMIT);
+  const commitOutputValue = revealFee + runeOutputValue + revealChangeReserve;
+  const commitVBytes = estimateCommitVBytes(
+    params.numTaprootInputs,
+    params.numSegwitInputs,
+    params.numCommitOutputs ?? 2,
+  );
+  const commitFee = Math.ceil(commitVBytes * params.commitFeeRate);
+
+  return {
+    revealVBytes,
+    revealFee,
+    runeOutputValue,
+    parentReturnValue,
+    revealChangeReserve,
+    commitOutputValue,
+    commitVBytes,
+    commitFee,
+    total: commitOutputValue + commitFee,
+  };
+}
+
 export function buildCommitTx(params: CommitTxParams): CommitTxResult {
   const {
     runeName, inscriptionFile, delegateId, parentInscription, fundingUtxos,
@@ -95,15 +145,15 @@ export function buildCommitTx(params: CommitTxParams): CommitTxResult {
   const hasInscription = !!inscriptionFile || !!delegateId;
   const contentSize = inscriptionFile?.body.length ?? 0;
   // Always include a rune receiver output — runes need a non-OP_RETURN destination.
-  // In inscription mode: this is the inscription output. In no-inscription: dedicated dust output.
+  // In inscription mode: this is the inscription output. In pure rune mode: dedicated dust output.
   // Reveal budget uses the (possibly higher) revealFeeRate — that's what gets
   // baked into commit.vout[0]. Reveal can pay 1..revealFeeRate at sign time;
   // any unspent budget returns to payment as change.
   const revealVBytes = estimateRevealVBytes(contentSize, true, !!parentInscription);
   const revealFee = BigInt(Math.ceil(revealVBytes * revealFeeRate));
   const runeOutputValue = DUST_LIMIT; // rune receiver always present
-  const parentReturnValue = parentInscription ? DUST_LIMIT : 0n;
-  const commitOutputValue = revealFee + runeOutputValue + parentReturnValue + DUST_LIMIT;
+  const revealChangeReserve = DUST_LIMIT;
+  const commitOutputValue = revealFee + runeOutputValue + revealChangeReserve;
 
   const psbt = new bitcoin.Psbt({ network });
 

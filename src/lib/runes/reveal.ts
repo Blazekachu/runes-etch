@@ -79,7 +79,25 @@ export function buildRevealTx(params: RevealTxParams): RevealTxResult {
   });
   if (!commitOutputScript) throw new Error('Failed to derive commit output script');
 
-  // --- Input 0: Commit UTXO (script path spend) ---
+  // --- Input 0 for parent-child: Parent inscription UTXO ---
+  // Ordinal sat assignment follows input order then output order. The parent
+  // input must appear before the commit input, and the parent-return output
+  // must appear before the child/rune output, or a dust parent can fall into
+  // the fee tail.
+  if (parentInscription) {
+    const parentOutputScript = bitcoin.address.toOutputScript(parentInscription.address, network);
+    psbt.addInput({
+      hash: parentInscription.txid,
+      index: parentInscription.vout,
+      witnessUtxo: {
+        script: parentOutputScript,
+        value: BigInt(parentInscription.value),
+      },
+      tapInternalKey: internalPubkey,
+    });
+  }
+
+  // --- Commit UTXO (script path spend) ---
   psbt.addInput({
     hash: commitState.txid,
     index: commitState.commitOutputIndex,
@@ -95,21 +113,6 @@ export function buildRevealTx(params: RevealTxParams): RevealTxResult {
       },
     ],
   });
-
-  // --- Input 1: Parent inscription UTXO (optional) ---
-  // v2 FIX: use parent's actual address, not hardcoded changeAddress
-  if (parentInscription) {
-    const parentOutputScript = bitcoin.address.toOutputScript(parentInscription.address, network);
-    psbt.addInput({
-      hash: parentInscription.txid,
-      index: parentInscription.vout,
-      witnessUtxo: {
-        script: parentOutputScript,
-        value: BigInt(parentInscription.value),
-      },
-      tapInternalKey: internalPubkey,
-    });
-  }
 
   // --- Input 2+: Additional funding UTXOs ---
   // M10 FIX: Use each UTXO's actual address instead of assuming changeAddress
@@ -129,26 +132,28 @@ export function buildRevealTx(params: RevealTxParams): RevealTxResult {
     psbt.addInput(input as unknown as Parameters<typeof psbt.addInput>[0]);
   }
 
-  // --- Output 0: Rune receiver output (always present) ---
-  // In inscription mode: this is the inscription output at receiverAddress
-  // In no-inscription mode: dedicated dust output at receiverAddress
-  // Ensures runes always land on the taproot/ordinals address, not the change address
   let outputIndex = 0;
+
+  // --- Output 0 for parent-child: Parent return output ---
+  // Parent is an inscription — return it to taproot/ordinals address before
+  // any commit-input sats are allocated to child/rune/change outputs.
+  if (parentInscription) {
+    psbt.addOutput({
+      address: receiverAddress,
+      value: BigInt(parentInscription.value),
+    });
+    outputIndex++;
+  }
+
+  // --- Rune receiver output (always present) ---
+  // In inscription mode: this is the inscription output at receiverAddress
+  // In pure rune mode: dedicated dust output at receiverAddress
+  // Ensures runes always land on the taproot/ordinals address, not the change address
   psbt.addOutput({
     address: receiverAddress,
     value: DUST_LIMIT,
   });
   const runeOutputIndex = outputIndex++;
-
-  // --- Output: Parent return output (if parent present) ---
-  // Parent is an inscription — return to taproot/ordinals address, not payment/change
-  if (parentInscription) {
-    psbt.addOutput({
-      address: receiverAddress,
-      value: DUST_LIMIT,
-    });
-    outputIndex++;
-  }
 
   // --- OP_RETURN output: Runestone with etching data + vanity nonce ---
   const runestoneScript = buildRunestoneScript({
@@ -179,7 +184,7 @@ export function buildRevealTx(params: RevealTxParams): RevealTxResult {
 
   const totalOut =
     DUST_LIMIT + // rune receiver output (always present)
-    (parentInscription ? DUST_LIMIT : 0n) +
+    (parentInscription ? BigInt(parentInscription.value) : 0n) +
     0n; // OP_RETURN has value 0
 
   const changeValue = totalIn - totalOut - fee;

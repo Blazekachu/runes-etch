@@ -12,7 +12,7 @@ Five complete security audits performed across all 33 source files. Findings:
 | Private-key leaks | **0** |
 | Injection / XSS vectors | **0** |
 
-Validation: 57 tests passing, testnet4-validated across all 4 etching modes (Quick, No-inscription, No-parent, Full).
+Validation: automated tests passing; the current v2 three-mode flow is pending a fresh testnet4 validation pass.
 
 ## Fund-Critical Guarantees
 
@@ -25,7 +25,6 @@ Every fund-critical path is guarded:
 - Mode locked after first commit — can't switch from Full → Quick mid-etch
 - Insufficient funds throws **before** signing (no half-signed PSBTs)
 - Dust-change warning before broadcast
-- Quick-etch validates rune name is fully unlocked (block height check)
 - Premine includes a dust output so the runes don't burn on the runestone
 
 ## Private-Key Guarantees
@@ -52,7 +51,6 @@ Private keys never leave the user's wallet extension:
 
 These are documented limits, not bugs:
 
-- **Front-running risk on Quick mode** — Quick etch has no front-run protection (rune commitment happens in a single TX, visible in mempool). Commit-reveal modes protect the name via tapscript commitment.
 - **bitcoinjs-lib internal API dependency** — Uses `__CACHE.__TX` for locktime/TXID computation. Pinned to exact `7.0.1` (not `^7.0.1`) — upgrades will break vanity grinding.
 - **Fee estimation is approximate** — Conservative (rounds up), so the error direction is safe.
 - **Vanity grinder is probabilistic** — 6 hex characters maximum; UI shows difficulty estimate before grinding.

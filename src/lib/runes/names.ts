@@ -217,33 +217,8 @@ export function blocksUntilNameUnlocks(
  */
 export function computeUnlockHeight(name: string): number {
   const value = runeNameToU128(name);
-  const charLen = name.length;
-
-  if (charLen > 12) {
-    // 13+ char names available from activation
-    return RUNES_ACTIVATION;
-  }
-  if (charLen < 1) return RUNES_ACTIVATION + SUBSIDY_HALVING_INTERVAL;
-
-  // Which STEPS interval does this name fall in?
-  // STEPS[charLen] = start of this char-length range
-  // STEPS[charLen - 1] = end (start of shorter range)
-  const stepStart = STEPS[charLen];
-  const stepEnd = STEPS[charLen - 1];
-
-  // The window index for this character length: UNLOCKED - charLen
-  const windowIndex = UNLOCKED - charLen;
-  const windowStart = RUNES_ACTIVATION + windowIndex * UNLOCK_INTERVAL;
-
-  if (stepStart === stepEnd) return windowStart;
-
-  // Interpolation: value = stepStart - (stepStart - stepEnd) * remainder / UNLOCK_INTERVAL
-  // Solve for remainder: remainder = (stepStart - value) * UNLOCK_INTERVAL / (stepStart - stepEnd)
-  const numerator = (stepStart - value) * BigInt(UNLOCK_INTERVAL);
-  const denominator = stepStart - stepEnd;
-  const remainder = Number(numerator / denominator);
-
-  return windowStart + Math.min(remainder, UNLOCK_INTERVAL - 1);
+  const delta = blocksUntilNameUnlocks(value, RUNES_ACTIVATION);
+  return delta >= 0 ? RUNES_ACTIVATION + delta : RUNES_ACTIVATION + SUBSIDY_HALVING_INTERVAL;
 }
 
 /**

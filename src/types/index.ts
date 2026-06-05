@@ -1,6 +1,4 @@
-// --- Etching Modes ---
-
-export type EtchMode = 'full' | 'no-parent' | 'no-inscription';
+export type ProductMode = 'parent-child' | 'rune-inscription' | 'rune';
 
 // --- Builder v2 Phase ---
 
