@@ -3,8 +3,8 @@
 import { useState, useEffect } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { validateRuneName, spacerBitmask } from '@/lib/runes/names';
-import { getRuneNameStatus, getRuneMinimumFromOrd } from '@/lib/api/ordinals';
-import { getCurrentBlockHeight } from '@/lib/api/mempool';
+import { getRuneNameStatus, getRuneMinimumFromOrdForAddress, setOrdinalsTestnet } from '@/lib/api/ordinals';
+import { getCurrentBlockHeightForAddress } from '@/lib/api/mempool';
 import SectionWrapper from './SectionWrapper';
 
 export default function RuneDetailsSection() {
@@ -55,7 +55,7 @@ export default function RuneDetailsSection() {
   async function loadBlockHeight() {
     setHeightError(null);
     try {
-      const h = await getCurrentBlockHeight();
+      const h = await getCurrentBlockHeightForAddress(wallet.taprootAddress || wallet.paymentAddress);
       setBlockHeight(h);
       setCurrentBlockHeight(h);
     } catch (err) {
@@ -69,11 +69,12 @@ export default function RuneDetailsSection() {
     (async () => {
       if (cancelled) return;
       await loadBlockHeight();
+      setOrdinalsTestnet(wallet.taprootAddress || wallet.paymentAddress);
       // #11: fetch the chain's authoritative rune-name minimum so the builder
       // can reject below-minimum names on testnet4 (and any chain) before
       // broadcasting a TX that ord would silently cenotaph.
       if (cancelled) return;
-      const min = await getRuneMinimumFromOrd();
+      const min = await getRuneMinimumFromOrdForAddress(wallet.taprootAddress || wallet.paymentAddress);
       if (cancelled) return;
       setRuneMinimum(min);
     })();

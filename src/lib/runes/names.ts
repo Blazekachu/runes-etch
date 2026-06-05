@@ -160,6 +160,48 @@ function minimumAtHeightWithActivation(
   return stepStart - ((stepStart - stepEnd) * remainder / BigInt(UNLOCK_INTERVAL));
 }
 
+function inferActivationHeightFromNextMinimum(
+  currentBlockHeight: number,
+  nextBlockMinimum: bigint,
+): number | null {
+  if (currentBlockHeight <= 0) return null;
+  const nextBlockHeight = currentBlockHeight + 1;
+  const lo = nextBlockHeight - SUBSIDY_HALVING_INTERVAL;
+  const hi = nextBlockHeight + 1;
+  let match: number | null = null;
+
+  for (let activation = lo; activation <= hi; activation++) {
+    if (minimumAtHeightWithActivation(nextBlockHeight, activation) !== nextBlockMinimum) continue;
+    if (match !== null) return null;
+    match = activation;
+  }
+
+  return match;
+}
+
+function unlockHeightWithActivation(
+  targetValue: bigint,
+  currentBlockHeight: number,
+  activationHeight: number,
+): number | null {
+  let lo = currentBlockHeight + 1;
+  let hi = activationHeight + SUBSIDY_HALVING_INTERVAL;
+
+  if (minimumAtHeightWithActivation(lo, activationHeight) <= targetValue) return lo;
+  if (minimumAtHeightWithActivation(hi, activationHeight) > targetValue) return null;
+
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (minimumAtHeightWithActivation(mid, activationHeight) <= targetValue) {
+      hi = mid;
+    } else {
+      lo = mid + 1;
+    }
+  }
+
+  return lo;
+}
+
 /**
  * Exact: how many more blocks must elapse before a name with `targetValue`
  * becomes etchable without commit-reveal at the given chain. The returned
@@ -251,12 +293,18 @@ export function validateRuneName(
     if (nameValue < runeMinimum) {
       const minName = u128ToRuneName(runeMinimum);
       // Finding #15: project when the name will unlock so the user knows
-      // which block to time the reveal for. EXACT only on mainnet — testnet4
-      // has a different `first_rune_height` we don't know reliably, so we
-      // skip the projection there (the warning still tells the user to use
-      // commit-reveal mode).
+      // which block to time the reveal for. Mainnet uses its fixed activation;
+      // testnet4 infers activation from ord's current next-block minimum.
       let unlockHeight: number | undefined;
-      if (!isTestnet && currentBlockHeight > 0) {
+      if (isTestnet && currentBlockHeight > 0) {
+        const activationHeight = inferActivationHeightFromNextMinimum(currentBlockHeight, runeMinimum);
+        const projected = activationHeight === null
+          ? null
+          : unlockHeightWithActivation(nameValue, currentBlockHeight, activationHeight);
+        if (projected !== null && projected > currentBlockHeight) {
+          unlockHeight = projected;
+        }
+      } else if (currentBlockHeight > 0) {
         const blocksToUnlock = blocksUntilNameUnlocks(nameValue, currentBlockHeight);
         if (blocksToUnlock > 0) {
           unlockHeight = currentBlockHeight + blocksToUnlock;

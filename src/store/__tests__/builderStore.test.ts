@@ -54,6 +54,15 @@ describe('builderStore product mode', () => {
     expect(state.delegateInscriptionId).toBeNull();
   });
 
+  it('treats pure rune mode as ready even if stale parent resume state survived refresh', () => {
+    const store = useBuilderStore.getState();
+
+    store.setProductMode('rune');
+    store.setPendingParentId(`${'d'.repeat(64)}i0`);
+
+    expect(useBuilderStore.getState().isProductModeReady()).toBe(true);
+  });
+
   it('requires child content for parent-child mode', () => {
     const store = useBuilderStore.getState();
 

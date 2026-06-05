@@ -40,10 +40,11 @@ export function getRevealNameGate(params: {
 }
 
 export function formatLockedNameWarning(gate: Extract<RevealNameGate, { status: 'locked' }>): string {
+  const formatHeight = (height: number) => height.toLocaleString('en-US');
   const heightText = gate.unlockHeight !== null
-    ? `Name unlocks at block ${gate.unlockHeight.toLocaleString()}. Current height is ${gate.currentHeight.toLocaleString()}.`
+    ? `Name unlocks at block ${formatHeight(gate.unlockHeight)}. Current height is ${formatHeight(gate.currentHeight)}.`
     : gate.currentMinimumName
       ? `Current minimum etchable name is ${gate.currentMinimumName}.`
       : 'Current protocol minimum could not be projected to an exact unlock height.';
-  return `${heightText} Broadcasting the reveal before the name is unlocked will likely create a cenotaph.`;
+  return `${heightText} If you override and broadcast before that protocol unlock, override will likely create a cenotaph.`;
 }

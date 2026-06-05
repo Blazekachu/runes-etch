@@ -1,5 +1,5 @@
 import type { OrdRuneResponse, OrdInscriptionResponse, OrdOutputResponse, OrdSatResponse, ParentInscription, UtxoSatInfo } from '@/types';
-import { mempoolBaseForAddress, getCurrentBlockHeight } from './mempool';
+import { mempoolBaseForAddress, getChainTipForChain, chainForAddress } from './mempool';
 import { runeNameToU128 } from '@/lib/runes/names';
 
 const PUBLIC_ORD_DEFAULT = 'https://ordinals.com';
@@ -35,6 +35,10 @@ function ordBase(): string {
   return _isTestnet ? ORD_BASE_TESTNET : ORD_BASE_MAINNET;
 }
 
+function ordBaseForNetwork(isTestnet: boolean): string {
+  return isTestnet ? ORD_BASE_TESTNET : ORD_BASE_MAINNET;
+}
+
 /**
  * True when the current network's ord base is the public default (ordinals.com).
  * Used to decide whether testnet calls should skip — they should only skip when
@@ -45,6 +49,10 @@ function ordBase(): string {
  */
 export function isPublicOrdForCurrentNetwork(): boolean {
   return ordBase() === PUBLIC_ORD_DEFAULT;
+}
+
+function isPublicOrdForNetwork(isTestnet: boolean): boolean {
+  return ordBaseForNetwork(isTestnet) === PUBLIC_ORD_DEFAULT;
 }
 
 function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
@@ -104,14 +112,13 @@ export async function getRuneNameStatus(name: string): Promise<RuneNameStatus> {
   // configured via NEXT_PUBLIC_ORD_BASE_TESTNET, the check is meaningful.
   if (_isTestnet && isPublicOrdForCurrentNetwork()) return { state: 'available' };
 
-  const [runeRes, ordStatusRes, chainHeight] = await Promise.all([
+  const [runeRes, ordStatusRes] = await Promise.all([
     fetchWithTimeout(`${ordBase()}/rune/${encodeURIComponent(name)}`, {
       headers: { Accept: 'application/json' },
     }),
     fetchWithTimeout(`${ordBase()}/status`, {
       headers: { Accept: 'application/json' },
     }).catch(() => null),
-    getCurrentBlockHeight().catch(() => -1),
   ]);
 
   if (runeRes.ok) {
@@ -127,14 +134,17 @@ export async function getRuneNameStatus(name: string): Promise<RuneNameStatus> {
   //  - indexer wedged on a reorg, OR indexer lagging — a recent etch we haven't
   //    indexed yet looks identical to never-etched.
   // Wedge beats lag — both can be true at once but the wedge is load-bearing.
-  if (!ordStatusRes || !ordStatusRes.ok || chainHeight < 0) {
+  if (!ordStatusRes || !ordStatusRes.ok) {
     return { state: 'available' };
   }
   const ordStatus = (await ordStatusRes.json()) as {
     height: number;
     unrecoverably_reorged?: boolean;
+    chain?: string;
   };
   const indexerHeight = ordStatus.height;
+  const chainHeight = await getChainTipForChain(ordStatus.chain ?? (_isTestnet ? 'testnet4' : 'bitcoin')).catch(() => -1);
+  if (chainHeight < 0) return { state: 'available' };
   const behind = Math.max(0, chainHeight - indexerHeight);
   if (ordStatus.unrecoverably_reorged === true) {
     return { state: 'unknown', reason: 'indexer-wedged', indexerHeight, chainHeight, behind };
@@ -170,11 +180,19 @@ export async function checkRuneNameAvailable(name: string): Promise<boolean> {
  * measure — fall back to the legacy behavior or refuse to broadcast".
  */
 export async function getRuneMinimumFromOrd(): Promise<bigint | null> {
+  return getRuneMinimumFromOrdForNetwork(_isTestnet);
+}
+
+export async function getRuneMinimumFromOrdForAddress(address?: string): Promise<bigint | null> {
+  return getRuneMinimumFromOrdForNetwork(chainForAddress(address) === 'testnet4');
+}
+
+export async function getRuneMinimumFromOrdForNetwork(isTestnet: boolean): Promise<bigint | null> {
   // Same skip as checkRuneNameAvailable: public ordinals.com is mainnet-only,
   // queries for a testnet wallet would return mainnet rules.
-  if (_isTestnet && isPublicOrdForCurrentNetwork()) return null;
+  if (isTestnet && isPublicOrdForNetwork(isTestnet)) return null;
   try {
-    const res = await fetchWithTimeout(`${ordBase()}/status`, {
+    const res = await fetchWithTimeout(`${ordBaseForNetwork(isTestnet)}/status`, {
       headers: { Accept: 'application/json' },
     });
     if (!res.ok) return null;

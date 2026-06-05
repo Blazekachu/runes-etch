@@ -327,7 +327,7 @@ export const useBuilderStore = create<BuilderStore>()(
         const hasChild = !!s.inscriptionFile || !!s.delegateInscriptionId;
         if (s.productMode === 'parent-child') return hasChild && !!s.parentInscription;
         if (s.productMode === 'rune-inscription') return hasChild;
-        return !hasChild && !s.parentInscription && !s.pendingParentId;
+        return true;
       },
 
       phase: 'building' as BuildPhase,

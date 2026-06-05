@@ -10,6 +10,7 @@ import { broadcastTx, bitcoinNetworkForAddress } from '@/lib/api/mempool';
 import { getRuneNameStatus } from '@/lib/api/ordinals';
 import { VanityGrinder } from '@/lib/vanity/grinder';
 import { createCommitBundle, downloadBundle } from '@/lib/bundle/export';
+import { getBuildBlockReason } from './buildReadiness';
 
 export default function BuildButton() {
   const etching = useBuilderStore((s) => s.etching);
@@ -82,14 +83,22 @@ export default function BuildButton() {
     wallet.paymentAddress.startsWith('tb1');
 
   const productReady = isProductModeReady();
-  const canBuild =
-    wallet.connected &&
-    !!etching.runeName &&
-    (selected.length > 0 || (targetUtxo && targetVerifyState === 'ok')) &&
-    selectedFeeRate > 0 &&
-    productReady &&
-    reinscribePrimaryValid &&
-    !targetBlocking;
+  const hasChild = !!inscriptionFile || !!delegateInscriptionId;
+  const hasFunding = selected.length > 0 || !!(targetUtxo && targetVerifyState === 'ok');
+  const buildBlockReason = getBuildBlockReason({
+    walletConnected: wallet.connected,
+    hasRuneName: !!etching.runeName,
+    hasFunding,
+    selectedFeeRate,
+    productReady,
+    productMode,
+    hasChild,
+    hasParent: !!parentInscription,
+    reinscribeMode,
+    reinscribePrimaryValid: !!reinscribePrimaryValid,
+    targetVerifyState,
+  });
+  const canBuild = buildBlockReason === null && !targetBlocking;
 
   function deriveInternalPubkey(): Buffer {
     if (!/^[0-9a-f]+$/i.test(wallet.publicKey)) {
@@ -288,7 +297,8 @@ export default function BuildButton() {
     }
 
     if (!etching.runeName) { setError('Rune name is empty.'); return; }
-    if (selected.length === 0) { setError('No UTXOs selected.'); return; }
+    if (!hasFunding) { setError('No funding UTXO selected or verified target UTXO.'); return; }
+    if (buildBlockReason) { setError(buildBlockReason); return; }
 
     broadcastingRef.current = true;
     setLoading(true);
@@ -416,6 +426,9 @@ export default function BuildButton() {
         )}
         {buttonLabel}
       </button>
+      {!canBuild && !loading && !grinding && buildBlockReason && (
+        <p className="text-xs text-gray-500">{buildBlockReason}</p>
+      )}
     </div>
   );
 }

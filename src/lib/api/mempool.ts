@@ -33,6 +33,10 @@ function isTestnetAddress(address?: string): boolean {
   return !!address && (address.startsWith('tb1') || address.startsWith('2') || address.startsWith('m') || address.startsWith('n'));
 }
 
+export function chainForAddress(address?: string): 'bitcoin' | 'testnet4' {
+  return isTestnetAddress(address) ? 'testnet4' : 'bitcoin';
+}
+
 /** Detect network from address prefix and return the primary API base.
  *  (Kept for direct/display use; live fetches go through the fallback list.) */
 export function mempoolBaseForAddress(address?: string): string {
@@ -279,6 +283,10 @@ export async function getCurrentBlockHeight(): Promise<number> {
   // L3: Guard against NaN from non-numeric API response
   if (isNaN(height) || height < 0) throw new Error('Invalid block height from API');
   return height;
+}
+
+export async function getCurrentBlockHeightForAddress(address?: string): Promise<number> {
+  return getChainTipForChain(chainForAddress(address));
 }
 
 /** Provider list (with fallback) keyed by the bitcoin network name ord reports

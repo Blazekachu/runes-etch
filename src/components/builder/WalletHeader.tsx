@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { connectWallet, disconnectWallet, type WalletProvider } from '@/lib/wallet/xverse';
 import { useBuilderStore } from '@/store/builderStore';
-import { setMempoolNetwork, getCurrentBlockHeight } from '@/lib/api/mempool';
+import { setMempoolNetwork, getCurrentBlockHeightForAddress } from '@/lib/api/mempool';
 import { setOrdinalsTestnet } from '@/lib/api/ordinals';
 
 export default function WalletHeader() {
@@ -34,7 +34,7 @@ export default function WalletHeader() {
       setWallet(w);
       setSection('utxo', true);
       try {
-        const h = await getCurrentBlockHeight();
+        const h = await getCurrentBlockHeightForAddress(w.taprootAddress);
         setCurrentBlockHeight(h);
       } catch { /* non-fatal */ }
     } catch (err) {

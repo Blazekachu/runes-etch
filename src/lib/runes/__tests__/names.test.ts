@@ -420,11 +420,11 @@ describe('Rune name encoding', () => {
       }
     });
 
-    it('omits unlockHeight on TESTNET (we don\'t know testnet4 activation height)', () => {
-      const result = validateRuneName('BUDDY', 136_590, true, 2_789_068n);
+    it('projects unlockHeight on TESTNET when ord supplies the current minimum', () => {
+      const result = validateRuneName('BUDDY', 138_072, true, runeNameToU128('CWKJN'));
       expect(result.valid).toBe(false);
       if (!result.valid) {
-        expect(result.unlockHeight).toBeUndefined();
+        expect(result.unlockHeight).toBe(138_806);
       }
     });
 

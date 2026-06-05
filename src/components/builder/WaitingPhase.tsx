@@ -797,7 +797,7 @@ export default function WaitingPhase() {
 
       {revealNameLocked && nameRevealOverride && (
         <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-          Override enabled. Broadcasting before the name unlocks may create a cenotaph; protocol outcome is your choice.
+          Override enabled. {revealNameGate.status === 'locked' ? formatLockedNameWarning(revealNameGate) : 'Broadcasting before the name unlocks may create a cenotaph; protocol outcome is your choice.'}
         </div>
       )}
 
@@ -815,7 +815,9 @@ export default function WaitingPhase() {
               : revealNameInvalid
                 ? 'Rune name invalid'
                 : revealNameLocked && !nameRevealOverride
-                  ? 'Name locked until protocol unlock'
+                  ? revealNameGate.status === 'locked' && revealNameGate.unlockHeight !== null
+                    ? `Name locked until block ${revealNameGate.unlockHeight.toLocaleString('en-US')}`
+                    : 'Name locked until protocol unlock'
               : `Waiting\u2026 (${confirmations}/${REQUIRED_CONFIRMATIONS} confirmations)`}
         </button>
       </div>
