@@ -2,6 +2,7 @@ import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { buildTapscript, buildBareTapscript } from './inscription';
 import { runeNameToCommitmentBytes } from './names';
+import { buildFundingPsbtInput, type PsbtKeyMaterial } from './psbtInputs';
 import type { InscriptionFile, ParentInscription, Utxo } from '@/types';
 
 bitcoin.initEccLib(ecc);
@@ -34,6 +35,7 @@ export interface CommitTxParams {
   revealFeeRate?: number;
   changeAddress: string;
   internalPubkey: Buffer;
+  psbtKeys: PsbtKeyMaterial;
   network?: bitcoin.Network;
   /**
    * nLockTime value for vanity commit-TXID grinding. Ignored by consensus when all
@@ -108,7 +110,7 @@ export function estimateCommitFunding(params: CommitFundingEstimateParams): Comm
 export function buildCommitTx(params: CommitTxParams): CommitTxResult {
   const {
     runeName, inscriptionFile, delegateId, parentInscription, fundingUtxos,
-    feeRate, changeAddress, internalPubkey,
+    feeRate, changeAddress, internalPubkey, psbtKeys,
     network = bitcoin.networks.bitcoin,
   } = params;
   const revealFeeRate = params.revealFeeRate ?? feeRate;
@@ -167,18 +169,7 @@ export function buildCommitTx(params: CommitTxParams): CommitTxResult {
 
   let totalInput = 0n;
   for (const utxo of fundingUtxos) {
-    const isTaproot = utxo.address.startsWith('bc1p') || utxo.address.startsWith('tb1p');
-    const input: Record<string, unknown> = {
-      hash: utxo.txid,
-      index: utxo.vout,
-      witnessUtxo: {
-        script: bitcoin.address.toOutputScript(utxo.address, network),
-        value: BigInt(utxo.value),
-      },
-    };
-    // C1: Only set tapInternalKey for P2TR inputs. P2WPKH inputs don't use it.
-    if (isTaproot) input.tapInternalKey = internalPubkey;
-    psbt.addInput(input as unknown as Parameters<typeof psbt.addInput>[0]);
+    psbt.addInput(buildFundingPsbtInput(utxo, network, psbtKeys));
     totalInput += BigInt(utxo.value);
   }
 

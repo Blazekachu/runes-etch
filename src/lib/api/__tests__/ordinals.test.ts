@@ -173,6 +173,15 @@ describe('getRuneNameStatus (Finding #10 — lag-aware rune lookup)', () => {
     await expect(getRuneNameStatus('FOO')).rejects.toThrow(/500/);
   });
 
+  it('returns unknown (not throw) when ord returns 406 for JSON rune lookup', async () => {
+    installFetchMock({ rune: { status: 406 } });
+    const s = await getRuneNameStatus('WOKEN');
+    expect(s.state).toBe('unknown');
+    if (s.state === 'unknown') {
+      expect(s.reason).toBe('api-unavailable');
+    }
+  });
+
   it('throws on invalid rune name format', async () => {
     await expect(getRuneNameStatus('lowercase')).rejects.toThrow(/Invalid rune name/);
   });

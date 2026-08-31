@@ -4,6 +4,7 @@
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { buildRunestoneScript } from './runestone';
+import { buildFundingPsbtInput, type PsbtKeyMaterial } from './psbtInputs';
 import type { RuneEtching, CommitTxState, ParentInscription, Utxo } from '@/types';
 
 bitcoin.initEccLib(ecc);
@@ -32,6 +33,7 @@ export interface RevealTxParams {
   receiverAddress: string;
   changeAddress: string;
   vanityNonce: Uint8Array;
+  psbtKeys: PsbtKeyMaterial;
   /** nLockTime value for vanity TXID grinding. Ignored by consensus when all sequences are 0xffffffff. */
   locktime?: number;
   network?: bitcoin.Network;
@@ -58,6 +60,7 @@ export function buildRevealTx(params: RevealTxParams): RevealTxResult {
     receiverAddress,
     changeAddress,
     vanityNonce,
+    psbtKeys,
     locktime = 0,
     network = bitcoin.networks.bitcoin,
   } = params;
@@ -117,19 +120,7 @@ export function buildRevealTx(params: RevealTxParams): RevealTxResult {
   // --- Input 2+: Additional funding UTXOs ---
   // M10 FIX: Use each UTXO's actual address instead of assuming changeAddress
   for (const utxo of additionalFundingUtxos) {
-    const fundingScript = bitcoin.address.toOutputScript(utxo.address, network);
-    const isTaproot = utxo.address.startsWith('bc1p') || utxo.address.startsWith('tb1p');
-    const input: Record<string, unknown> = {
-      hash: utxo.txid,
-      index: utxo.vout,
-      witnessUtxo: {
-        script: fundingScript,
-        value: BigInt(utxo.value),
-      },
-    };
-    // Only set tapInternalKey for P2TR inputs; P2WPKH inputs don't use it
-    if (isTaproot) input.tapInternalKey = internalPubkey;
-    psbt.addInput(input as unknown as Parameters<typeof psbt.addInput>[0]);
+    psbt.addInput(buildFundingPsbtInput(utxo, network, psbtKeys));
   }
 
   let outputIndex = 0;

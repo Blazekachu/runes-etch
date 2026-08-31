@@ -10,6 +10,7 @@ import { runeNameToCommitmentBytes } from '@/lib/runes/names';
 import { formatLockedNameWarning, getRevealNameGate, type RevealNameGate } from '@/lib/runes/revealNameGate';
 import { canBroadcastRevealAtCurrentConfirmations, getFreshRevealNameGate, REVEAL_BROADCAST_CONFIRMATIONS } from '@/lib/runes/revealSafety';
 import { signPsbt, connectWallet, getActiveProvider } from '@/lib/wallet/xverse';
+import { walletToPsbtKeys } from '@/lib/wallet/psbtKeys';
 import { broadcastTx, fetchFeeRates, getTxConfirmations, fetchUtxos, setMempoolNetwork, bitcoinNetworkForAddress } from '@/lib/api/mempool';
 import { getRuneNameStatus, setOrdinalsTestnet, resolveParentForReveal } from '@/lib/api/ordinals';
 import type { FeeRates } from '@/types';
@@ -158,7 +159,9 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
       // rather than thinking the name was stolen.
       const nameStatus = await getRuneNameStatus(etching.runeName);
       if (nameStatus.state === 'unknown') {
-        const reason = isTestnet && nameStatus.reason === 'indexer-wedged'
+        const reason = nameStatus.reason === 'api-unavailable'
+          ? 'Ord JSON API is unavailable for this name lookup (HTTP 406).'
+          : isTestnet && nameStatus.reason === 'indexer-wedged'
           ? `Local testnet4 ord is wedged on a reorg (ord at ${nameStatus.indexerHeight}, tip at ${nameStatus.chainHeight}).`
           : `Indexer is ${nameStatus.behind} blocks behind chain tip (ord at ${nameStatus.indexerHeight}, tip at ${nameStatus.chainHeight}).`;
         throw new Error(`${reason} Cannot confirm "${etching.runeName}" is still unused. Wait until the name check is trustworthy before broadcasting the reveal.`);
@@ -304,6 +307,7 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
         // segwit entirely when commitState.changeAddress was blank (bundle resume).
         changeAddress: commitState.changeAddress || wallet.paymentAddress || wallet.taprootAddress,
         vanityNonce: new Uint8Array(0),
+        psbtKeys: walletToPsbtKeys(wallet, internalPubkey),
         locktime: vanityLocktime ?? 0,
         network: bitcoinNetworkForAddress(wallet.taprootAddress),
       });

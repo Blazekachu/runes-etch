@@ -3,8 +3,9 @@
 import { useState, useEffect } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { validateRuneName, spacerBitmask } from '@/lib/runes/names';
-import { getRuneNameStatus, getRuneMinimumFromOrdForAddress, setOrdinalsTestnet } from '@/lib/api/ordinals';
+import { getRuneNameStatus, getRuneStatusFromOrdForAddress, setOrdinalsTestnet } from '@/lib/api/ordinals';
 import { getCurrentBlockHeightForAddress } from '@/lib/api/mempool';
+import { canValidateRuneNetworkState, resetRuneNetworkState } from './runeNetworkState';
 import SectionWrapper from './SectionWrapper';
 
 export default function RuneDetailsSection() {
@@ -52,35 +53,49 @@ export default function RuneDetailsSection() {
   // Fetch block height on mount AND whenever the wallet network changes — mainnet
   // and testnet have very different tips, so a network switch in-session would
   // otherwise apply a stale height to validation.
-  async function loadBlockHeight() {
+  async function loadBlockHeight(address = wallet.taprootAddress || wallet.paymentAddress) {
     setHeightError(null);
     try {
-      const h = await getCurrentBlockHeightForAddress(wallet.taprootAddress || wallet.paymentAddress);
+      const h = await getCurrentBlockHeightForAddress(address);
       setBlockHeight(h);
       setCurrentBlockHeight(h);
+      return h;
     } catch (err) {
       // Surface failure instead of swallowing — left as 0 silently produced
       // misleading "minimum is 13 letters" errors in validateRuneName.
       setHeightError(err instanceof Error ? err.message : 'Failed to fetch chain tip');
+      return null;
     }
   }
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      const address = wallet.taprootAddress || wallet.paymentAddress;
+      const cleared = resetRuneNetworkState();
+      setBlockHeight(cleared.blockHeight);
+      setCurrentBlockHeight(cleared.blockHeight);
+      setRuneMinimum(cleared.runeMinimum);
+      if (!address) return;
+      setOrdinalsTestnet(address);
       if (cancelled) return;
-      await loadBlockHeight();
-      setOrdinalsTestnet(wallet.taprootAddress || wallet.paymentAddress);
+      const [heightFromMempool, ordStatus] = await Promise.all([
+        loadBlockHeight(address),
+        getRuneStatusFromOrdForAddress(address),
+      ]);
+      if (cancelled) return;
+      if (heightFromMempool === null && ordStatus.height !== null) {
+        setBlockHeight(ordStatus.height);
+        setCurrentBlockHeight(ordStatus.height);
+        setHeightError(null);
+      }
       // #11: fetch the chain's authoritative rune-name minimum so the builder
       // can reject below-minimum names on testnet4 (and any chain) before
       // broadcasting a TX that ord would silently cenotaph.
-      if (cancelled) return;
-      const min = await getRuneMinimumFromOrdForAddress(wallet.taprootAddress || wallet.paymentAddress);
-      if (cancelled) return;
-      setRuneMinimum(min);
+      setRuneMinimum(ordStatus.runeMinimum);
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wallet.taprootAddress]);
+  }, [wallet.taprootAddress, wallet.paymentAddress]);
 
   // Re-validate the rune name when block height OR ord's minimum arrives or
   // changes. Without these deps the keystroke-time validation would persist
@@ -90,6 +105,11 @@ export default function RuneDetailsSection() {
   // suddenly becomes below-minimum.
   useEffect(() => {
     if (!runeName) { setNameError(''); setNameUnlockHeight(null); return; }
+    if (!canValidateRuneNetworkState({ blockHeight, runeMinimum })) {
+      setNameError('');
+      setNameUnlockHeight(null);
+      return;
+    }
     const v = validateRuneName(runeName, blockHeight, isTestnet, runeMinimum);
     if (v.valid) {
       setNameError('');
@@ -145,6 +165,11 @@ export default function RuneDetailsSection() {
     setAvailability(null);
     setAvailabilityMsg('');
     setSpacerPositions((prev) => prev.filter((p) => p < upper.length - 1));
+    if (!canValidateRuneNetworkState({ blockHeight, runeMinimum })) {
+      setNameError('');
+      setNameUnlockHeight(null);
+      return;
+    }
     const validation = validateRuneName(upper, blockHeight, isTestnet, runeMinimum);
     if (validation.valid) {
       setNameError('');
@@ -156,6 +181,10 @@ export default function RuneDetailsSection() {
   }
 
   async function handleCheck() {
+    if (!canValidateRuneNetworkState({ blockHeight, runeMinimum })) {
+      setHeightError('Loading chain tip — retry in a moment.');
+      return;
+    }
     const validation = validateRuneName(runeName, blockHeight, isTestnet, runeMinimum);
     if (!validation.valid) {
       setNameError(validation.error);
@@ -177,7 +206,11 @@ export default function RuneDetailsSection() {
         setAvailabilityMsg('Name is already taken.');
       } else {
         setAvailability('unknown');
-        if (status.reason === 'indexer-wedged') {
+        if (status.reason === 'api-unavailable') {
+          setAvailabilityMsg(
+            'Ord JSON API returned HTTP 406 for this name — cannot confirm on-chain status right now. Commit is still allowed; reveal will re-check before broadcast.'
+          );
+        } else if (status.reason === 'indexer-wedged') {
           setAvailabilityMsg(
             `Indexer wedged on a reorg (ord at ${status.indexerHeight}, tip at ${status.chainHeight}, ${status.behind} blocks behind). Name uniqueness cannot be checked from this indexer — verify out-of-band via mempool.space, ordiscan, or ord.net before broadcasting.`
           );
@@ -282,7 +315,7 @@ export default function RuneDetailsSection() {
           {heightError && (
             <p className="text-xs text-yellow-400">
               Couldn&apos;t fetch chain tip ({heightError}).{' '}
-              <button onClick={loadBlockHeight} className="underline hover:text-yellow-300">Retry</button>
+              <button onClick={() => void loadBlockHeight()} className="underline hover:text-yellow-300">Retry</button>
             </p>
           )}
         </div>

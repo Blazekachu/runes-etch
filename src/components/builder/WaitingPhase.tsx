@@ -5,6 +5,7 @@ import { useBuilderStore } from '@/store/builderStore';
 import { getTxConfirmations, bitcoinNetworkForAddress, setMempoolNetwork, fetchFeeRates } from '@/lib/api/mempool';
 import { setOrdinalsTestnet } from '@/lib/api/ordinals';
 import { connectWallet, getActiveProvider } from '@/lib/wallet/xverse';
+import { walletToPsbtKeys } from '@/lib/wallet/psbtKeys';
 import { createCommitBundle, downloadBundle } from '@/lib/bundle/export';
 import { buildTapscript, buildBareTapscript } from '@/lib/runes/inscription';
 import { runeNameToCommitmentBytes } from '@/lib/runes/names';
@@ -235,6 +236,7 @@ export default function WaitingPhase() {
           // #12: payment (segwit) over taproot for reveal change.
           changeAddress: commitState?.changeAddress || wallet.paymentAddress || wallet.taprootAddress,
           vanityNonce: new Uint8Array(0),
+          psbtKeys: walletToPsbtKeys(wallet, internalPubkey),
           network: btcNetwork,
         });
         return { template: serializeForTxid(psbt) };
@@ -261,6 +263,7 @@ export default function WaitingPhase() {
         receiverAddress: wallet.taprootAddress,
         changeAddress: commitState?.changeAddress || wallet.taprootAddress,
         vanityNonce: new Uint8Array(0),
+        psbtKeys: walletToPsbtKeys(wallet, internalPubkey),
         network: btcNetwork,
       });
       return { template: serializeForTxid(psbt) };

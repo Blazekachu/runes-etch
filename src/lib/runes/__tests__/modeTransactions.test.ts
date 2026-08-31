@@ -13,6 +13,11 @@ const network = bitcoin.networks.testnet;
 const internalPubkey = Buffer.from('79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798', 'hex');
 const paymentAddress = bitcoin.payments.p2wpkh({ hash: Buffer.alloc(20, 2), network }).address!;
 const taprootAddress = bitcoin.payments.p2tr({ internalPubkey, network }).address!;
+const psbtKeys = {
+  ordinalsInternalPubkey: internalPubkey,
+  ordinalsAddress: taprootAddress,
+  paymentAddress,
+};
 
 const etching: RuneEtching = {
   runeName: 'TESTMODE',
@@ -124,6 +129,7 @@ describe('mode transaction shapes', () => {
       feeRate: 2,
       changeAddress: paymentAddress,
       internalPubkey,
+      psbtKeys,
       network,
     });
 
@@ -140,6 +146,7 @@ describe('mode transaction shapes', () => {
       receiverAddress: taprootAddress,
       changeAddress: paymentAddress,
       vanityNonce: new Uint8Array(0),
+      psbtKeys,
       network,
     });
 
@@ -174,6 +181,7 @@ describe('mode transaction shapes', () => {
       receiverAddress: taprootAddress,
       changeAddress: paymentAddress,
       vanityNonce: new Uint8Array(0),
+      psbtKeys,
       network,
     });
 
@@ -237,6 +245,7 @@ describe('mode transaction shapes', () => {
       feeRate: 2,
       changeAddress: paymentAddress,
       internalPubkey,
+      psbtKeys,
       network,
     });
 
@@ -253,6 +262,7 @@ describe('mode transaction shapes', () => {
       receiverAddress: taprootAddress,
       changeAddress: paymentAddress,
       vanityNonce: new Uint8Array(0),
+      psbtKeys,
       network,
     });
 
@@ -276,6 +286,7 @@ describe('mode transaction shapes', () => {
       feeRate: 2,
       changeAddress: paymentAddress,
       internalPubkey,
+      psbtKeys,
       network,
     });
 
@@ -292,6 +303,7 @@ describe('mode transaction shapes', () => {
       receiverAddress: taprootAddress,
       changeAddress: paymentAddress,
       vanityNonce: new Uint8Array(0),
+      psbtKeys,
       network,
     });
 

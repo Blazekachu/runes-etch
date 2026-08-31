@@ -96,11 +96,7 @@ export async function validateBundle(
       result.error = `Rune name "${bundle.runeName}" has already been etched.`;
       return result;
     }
-    if (nameStatus.state === 'unknown') {
-      result.nameAvailable = false;
-      result.error = `Indexer is ${nameStatus.behind} blocks behind chain tip (ord at ${nameStatus.indexerHeight}, tip at ${nameStatus.chainHeight}) — cannot confirm "${bundle.runeName}" is still unused. Wait for the indexer to catch up before resuming.`;
-      return result;
-    }
+    // Commit already on-chain — indexer lag / ord 406 cannot be undone. Allow resume.
     result.nameAvailable = true;
 
     // Check parent (if any)

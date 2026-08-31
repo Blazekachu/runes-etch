@@ -130,7 +130,11 @@ export interface WalletState {
   connected: boolean;
   taprootAddress: string;
   paymentAddress: string;
+  /** Ordinals (taproot) public key — hex, 32 or 33 bytes. */
   publicKey: string;
+  /** Payment wallet public key — hex. Required for P2SH / payment taproot inputs. */
+  paymentPublicKey?: string;
+  paymentAddressType?: 'p2wpkh' | 'p2tr' | 'p2sh' | 'p2pkh';
 }
 
 // --- API Response Types ---

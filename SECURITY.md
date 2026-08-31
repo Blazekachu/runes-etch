@@ -4,28 +4,32 @@ This is a self-custodial Bitcoin tool. Funds flow through it; bugs can cost user
 
 ## Audit Status
 
-Five complete security audits performed across all 33 source files. Findings:
+Five complete static security audits were performed on the earlier (wizard) codebase — finding 0 key-leak and 0 injection/XSS vectors. The tool was then **rewritten into the v2 three-mode commit-reveal builder**, and the old wizard removed.
 
-| Category | Bugs Found |
+**A fund-loss bug was subsequently found in end-to-end testing and fixed:** in Parent Child mode the parent inscription could be carried into the transaction's fee tail (lost to the miner) because the parent input/output were not ordered ahead of the commit sats. It is fixed by placing the parent as the **first input** and its return as the **first output**, so the parent sat is always assigned to the return output before any other sats. The incident is the reason "tx confirmed ≠ rune/parent safe" is now an explicit verification step.
+
+| Category | Status |
 |---|---|
-| Fund-loss bugs | **0** |
-| Private-key leaks | **0** |
-| Injection / XSS vectors | **0** |
+| Private-key leaks | none found |
+| Injection / XSS vectors | none found |
+| Fund-loss bugs | one found in e2e (parent → fee tail) — **fixed**; full re-audit pending |
 
-Validation: automated tests passing; the current v2 three-mode flow is pending a fresh testnet4 validation pass.
+Validation: **160 automated tests passing**, `tsc` + production build clean. The current v2 three-mode flow is undergoing a fresh testnet4 end-to-end validation pass and a re-audit of the rewritten transaction-building code.
 
 ## Fund-Critical Guarantees
 
 Every fund-critical path is guarded:
 
-- Rune name re-checked before every broadcast (commit, reveal, quick) — 3 separate validation sites
-- Commit UTXO verified before reveal — prevents broadcasting a reveal against a non-existent commit
-- Double-click guard (`broadcastingRef`) on every broadcast button
-- Double-commit prevention — can't run two commits for the same etch
-- Mode locked after first commit — can't switch from Full → Quick mid-etch
-- Insufficient funds throws **before** signing (no half-signed PSBTs)
-- Dust-change warning before broadcast
-- Premine includes a dust output so the runes don't burn on the runestone
+- **Cenotaph protection** — rune name re-checked before the commit *and* again immediately before the reveal. The reveal is blocked when the name is already etched, when the indexer can't be trusted (lagging / wedged on a reorg), or when the name is still below the chain's current minimum (with the exact unlock block shown; advanced override required to proceed).
+- **Reveal timing** — reveal unlocks only at 5 commit confirmations, landing at the protocol-required 6th.
+- **Parent never lost** — in Parent Child mode the parent inscription is the first input and first output, so its sat is returned to the user's taproot and can never fall into the fee tail.
+- **Vanity TXID verified before broadcast** — after signing, the final commit/reveal TXID is re-checked against the requested prefix/suffix; broadcast is refused on any mismatch.
+- Commit UTXO / commitment verified before the reveal is built — no reveal against a non-existent or stale commit.
+- Double-click guard (`broadcastingRef`) on every broadcast button.
+- Double-commit prevention — can't run two commits for the same etch; mode is locked once a commit exists.
+- Insufficient funds throws **before** signing (no half-signed PSBTs).
+- Dust-change warning before broadcast; premine always gets a dust output so runes aren't burned on the runestone.
+- Resilient providers — `mempool.space` falls over to `mempool.emzy.de` for reads **and broadcast** so a provider outage can't strand a signed transaction.
 
 ## Private-Key Guarantees
 
@@ -40,7 +44,7 @@ Private keys never leave the user's wallet extension:
 ## XSS / Injection Defenses
 
 - CSP blocks all external scripts (`script-src 'self'`)
-- `connect-src` limited to `mempool.space` and `ordinals.com`
+- `connect-src` limited to `mempool.space` (+ subdomains), `mempool.emzy.de`, `ordinals.com`, and any explicitly configured ord origin (auto-added from `NEXT_PUBLIC_ORD_BASE*`)
 - `frame-ancestors 'none'` blocks clickjacking
 - Broadcast error messages HTML-sanitized
 - All API inputs regex-validated before use

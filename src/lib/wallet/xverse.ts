@@ -53,6 +53,8 @@ export async function connectWallet(provider: WalletProvider = 'sats-connect'): 
   const tapAddr = ordinalsAddr.address;
   const payAddr = paymentAddr.address;
   const pubKey = ordinalsAddr.publicKey;
+  const paymentPubKey = paymentAddr.publicKey;
+  const paymentAddressType = paymentAddr.addressType as WalletState['paymentAddressType'];
 
   if (!tapAddr || !/^(bc1p|tb1p)[a-z0-9]{58}$/i.test(tapAddr)) {
     throw new Error(`Invalid taproot address from wallet: ${tapAddr?.slice(0, 20)}`);
@@ -63,12 +65,17 @@ export async function connectWallet(provider: WalletProvider = 'sats-connect'): 
   if (!pubKey || !/^[0-9a-f]{64,66}$/i.test(pubKey)) {
     throw new Error(`Invalid public key from wallet: expected 32-33 byte hex`);
   }
+  if (!paymentPubKey || !/^[0-9a-f]{64,66}$/i.test(paymentPubKey)) {
+    throw new Error(`Invalid payment public key from wallet: expected 32-33 byte hex`);
+  }
 
   return {
     connected: true,
     taprootAddress: tapAddr,
     paymentAddress: payAddr,
     publicKey: pubKey,
+    paymentPublicKey: paymentPubKey,
+    paymentAddressType,
   };
 }
 
@@ -196,6 +203,7 @@ async function connectLeather(): Promise<WalletState> {
   const tapAddr = taprootAddr.address;
   const payAddr = paymentAddr.address;
   const pubKey = taprootAddr.publicKey;
+  const paymentPubKey = paymentAddr.publicKey;
 
   // L5: Validate addresses and public key
   if (!tapAddr || tapAddr.length < 20 || tapAddr.length > 90) {
@@ -207,12 +215,23 @@ async function connectLeather(): Promise<WalletState> {
   if (!pubKey || !/^[0-9a-f]{64,66}$/i.test(pubKey)) {
     throw new Error(`Invalid public key from wallet: expected 32-33 byte hex`);
   }
+  if (!paymentPubKey || !/^[0-9a-f]{64,66}$/i.test(paymentPubKey)) {
+    throw new Error(`Invalid payment public key from wallet: expected 32-33 byte hex`);
+  }
+
+  const leatherPaymentType: WalletState['paymentAddressType'] =
+    paymentAddr.type === 'p2tr' ? 'p2tr'
+    : paymentAddr.type === 'p2sh' ? 'p2sh'
+    : paymentAddr.type === 'p2wpkh' ? 'p2wpkh'
+    : 'p2pkh';
 
   return {
     connected: true,
     taprootAddress: tapAddr,
     paymentAddress: payAddr,
     publicKey: pubKey,
+    paymentPublicKey: paymentPubKey,
+    paymentAddressType: leatherPaymentType,
   };
 }
 

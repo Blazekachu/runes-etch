@@ -11,6 +11,7 @@ import { getRuneNameStatus } from '@/lib/api/ordinals';
 import { VanityGrinder } from '@/lib/vanity/grinder';
 import { createCommitBundle, downloadBundle } from '@/lib/bundle/export';
 import { getBuildBlockReason } from './buildReadiness';
+import { walletToPsbtKeys } from '@/lib/wallet/psbtKeys';
 
 export default function BuildButton() {
   const etching = useBuilderStore((s) => s.etching);
@@ -235,6 +236,7 @@ export default function BuildButton() {
       revealFeeRate: selectedRevealFeeRate ?? undefined,
       changeAddress: getChangeAddress(),
       internalPubkey,
+      psbtKeys: walletToPsbtKeys(wallet, internalPubkey),
       network: btcNetwork,
     };
 
@@ -314,12 +316,8 @@ export default function BuildButton() {
           `Rune name "${etching.runeName}" is already etched. Commit is blocked because reveal would be a sure protocol failure. Mint it if terms are open, or buy it on secondary.`
         );
       }
-      if (nameStatus.state === 'unknown') {
-        const reason = isTestnet && nameStatus.reason === 'indexer-wedged'
-          ? `Local testnet4 ord is wedged on a reorg (ord at ${nameStatus.indexerHeight}, tip at ${nameStatus.chainHeight}).`
-          : `Indexer is ${nameStatus.behind} blocks behind chain tip (ord at ${nameStatus.indexerHeight}, tip at ${nameStatus.chainHeight}).`;
-        throw new Error(`${reason} Cannot confirm "${etching.runeName}" is still unused. Commit is blocked until the name check is trustworthy.`);
-      }
+      // Commit-reveal: locked names and indexer uncertainty are OK at commit time.
+      // Reveal phase enforces unlock timing and re-checks availability.
 
       await handleCommitReveal();
     } catch (err) {

@@ -78,7 +78,7 @@ export type RuneNameStatus =
   | { state: 'taken'; rune: OrdRuneResponse }
   | {
       state: 'unknown';
-      reason: 'indexer-lagging' | 'indexer-wedged';
+      reason: 'indexer-lagging' | 'indexer-wedged' | 'api-unavailable';
       indexerHeight: number;
       chainHeight: number;
       behind: number;
@@ -124,6 +124,17 @@ export async function getRuneNameStatus(name: string): Promise<RuneNameStatus> {
   if (runeRes.ok) {
     const rune = (await runeRes.json()) as OrdRuneResponse;
     return { state: 'taken', rune };
+  }
+  // ordinals.com JSON API intermittently returns 406 for unetched names when
+  // Accept: application/json is set. This is not "name taken" — treat as unverified.
+  if (runeRes.status === 406) {
+    return {
+      state: 'unknown',
+      reason: 'api-unavailable',
+      indexerHeight: -1,
+      chainHeight: -1,
+      behind: -1,
+    };
   }
   if (runeRes.status !== 404) {
     throw new Error(`Ord API error on /rune/${encodeURIComponent(name)}: ${runeRes.status}`);
@@ -185,6 +196,31 @@ export async function getRuneMinimumFromOrd(): Promise<bigint | null> {
 
 export async function getRuneMinimumFromOrdForAddress(address?: string): Promise<bigint | null> {
   return getRuneMinimumFromOrdForNetwork(chainForAddress(address) === 'testnet4');
+}
+
+export async function getRuneStatusFromOrdForAddress(address?: string): Promise<{
+  height: number | null;
+  runeMinimum: bigint | null;
+}> {
+  const isTestnet = chainForAddress(address) === 'testnet4';
+  if (isTestnet && isPublicOrdForNetwork(isTestnet)) return { height: null, runeMinimum: null };
+  try {
+    const res = await fetchWithTimeout(`${ordBaseForNetwork(isTestnet)}/status`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return { height: null, runeMinimum: null };
+    const data = (await res.json()) as {
+      height?: number;
+      minimum_rune_for_next_block?: string;
+    };
+    const minName = data.minimum_rune_for_next_block;
+    return {
+      height: typeof data.height === 'number' && Number.isFinite(data.height) ? data.height : null,
+      runeMinimum: minName && /^[A-Z]+$/.test(minName) ? runeNameToU128(minName) : null,
+    };
+  } catch {
+    return { height: null, runeMinimum: null };
+  }
 }
 
 export async function getRuneMinimumFromOrdForNetwork(isTestnet: boolean): Promise<bigint | null> {
