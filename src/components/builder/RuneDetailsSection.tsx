@@ -3,8 +3,9 @@
 import { useState, useEffect } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { validateRuneName, spacerBitmask } from '@/lib/runes/names';
-import { getRuneNameStatus, getRuneStatusFromOrdForAddress, setOrdinalsTestnet } from '@/lib/api/ordinals';
-import { getCurrentBlockHeightForAddress } from '@/lib/api/mempool';
+import { getRuneNameStatus, getRuneStatusFromOrdForWallet, setOrdinalsForWallet } from '@/lib/api/ordinals';
+import { getCurrentBlockHeightForWallet } from '@/lib/api/mempool';
+import { isNonMainnet, walletChain } from '@/lib/network';
 import { canValidateRuneNetworkState, resetRuneNetworkState } from './runeNetworkState';
 import SectionWrapper from './SectionWrapper';
 
@@ -16,9 +17,8 @@ export default function RuneDetailsSection() {
   const setRuneMinimum = useBuilderStore((s) => s.setRuneMinimum);
   const wallet = useBuilderStore((s) => s.wallet);
   const phase = useBuilderStore((s) => s.phase);
-  const isTestnet =
-    wallet.taprootAddress.startsWith('tb1') ||
-    wallet.paymentAddress.startsWith('tb1');
+  const chain = walletChain(wallet);
+  const isNonMainnetChain = isNonMainnet(chain);
 
   // Local form state
   const [runeName, setRuneName] = useState(etching.runeName);
@@ -56,7 +56,7 @@ export default function RuneDetailsSection() {
   async function loadBlockHeight(address = wallet.taprootAddress || wallet.paymentAddress) {
     setHeightError(null);
     try {
-      const h = await getCurrentBlockHeightForAddress(address);
+      const h = await getCurrentBlockHeightForWallet(wallet);
       setBlockHeight(h);
       setCurrentBlockHeight(h);
       return h;
@@ -76,11 +76,11 @@ export default function RuneDetailsSection() {
       setCurrentBlockHeight(cleared.blockHeight);
       setRuneMinimum(cleared.runeMinimum);
       if (!address) return;
-      setOrdinalsTestnet(address);
+      setOrdinalsForWallet(wallet);
       if (cancelled) return;
       const [heightFromMempool, ordStatus] = await Promise.all([
         loadBlockHeight(address),
-        getRuneStatusFromOrdForAddress(address),
+        getRuneStatusFromOrdForWallet(wallet),
       ]);
       if (cancelled) return;
       if (heightFromMempool === null && ordStatus.height !== null) {
@@ -89,19 +89,19 @@ export default function RuneDetailsSection() {
         setHeightError(null);
       }
       // #11: fetch the chain's authoritative rune-name minimum so the builder
-      // can reject below-minimum names on testnet4 (and any chain) before
+      // can reject below-minimum names on signet (and any chain) before
       // broadcasting a TX that ord would silently cenotaph.
       setRuneMinimum(ordStatus.runeMinimum);
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wallet.taprootAddress, wallet.paymentAddress]);
+  }, [wallet.taprootAddress, wallet.paymentAddress, wallet.network]);
 
   // Re-validate the rune name when block height OR ord's minimum arrives or
   // changes. Without these deps the keystroke-time validation would persist
   // with a stale (often zero) height and the user sees a misleading "loading"
   // error even after the fetch completes; without runeMinimum we'd miss the
-  // moment the testnet4 minimum lands and a previously-permissive name
+  // moment the signet minimum lands and a previously-permissive name
   // suddenly becomes below-minimum.
   useEffect(() => {
     if (!runeName) { setNameError(''); setNameUnlockHeight(null); return; }
@@ -110,7 +110,7 @@ export default function RuneDetailsSection() {
       setNameUnlockHeight(null);
       return;
     }
-    const v = validateRuneName(runeName, blockHeight, isTestnet, runeMinimum);
+    const v = validateRuneName(runeName, blockHeight, isNonMainnetChain, runeMinimum);
     if (v.valid) {
       setNameError('');
       setNameUnlockHeight(null);
@@ -119,7 +119,7 @@ export default function RuneDetailsSection() {
       setNameUnlockHeight(v.unlockHeight ?? null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blockHeight, isTestnet, runeMinimum]);
+  }, [blockHeight, isNonMainnetChain, runeMinimum]);
 
   // Sync local input state FROM store when store changes externally (bundle load, reset).
   // Without these, useState's initial-value-only behavior would leave inputs at defaults
@@ -170,7 +170,7 @@ export default function RuneDetailsSection() {
       setNameUnlockHeight(null);
       return;
     }
-    const validation = validateRuneName(upper, blockHeight, isTestnet, runeMinimum);
+    const validation = validateRuneName(upper, blockHeight, isNonMainnetChain, runeMinimum);
     if (validation.valid) {
       setNameError('');
       setNameUnlockHeight(null);
@@ -185,7 +185,7 @@ export default function RuneDetailsSection() {
       setHeightError('Loading chain tip — retry in a moment.');
       return;
     }
-    const validation = validateRuneName(runeName, blockHeight, isTestnet, runeMinimum);
+    const validation = validateRuneName(runeName, blockHeight, isNonMainnetChain, runeMinimum);
     if (!validation.valid) {
       setNameError(validation.error);
       setNameUnlockHeight(validation.unlockHeight ?? null);

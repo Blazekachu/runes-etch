@@ -2,8 +2,10 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
-import { getTxConfirmations, bitcoinNetworkForAddress, setMempoolNetwork, fetchFeeRates } from '@/lib/api/mempool';
-import { setOrdinalsTestnet } from '@/lib/api/ordinals';
+import { getTxConfirmations, bitcoinNetworkForWallet, setMempoolNetwork, fetchFeeRates } from '@/lib/api/mempool';
+import { setOrdinalsForWallet } from '@/lib/api/ordinals';
+import { isNonMainnet, mempoolExplorerTxBase, walletChain } from '@/lib/network';
+import type { WalletState } from '@/types';
 import { connectWallet, getActiveProvider } from '@/lib/wallet/xverse';
 import { walletToPsbtKeys } from '@/lib/wallet/psbtKeys';
 import { createCommitBundle, downloadBundle } from '@/lib/bundle/export';
@@ -29,11 +31,8 @@ bitcoin.initEccLib(ecc);
 // — one block more conservative than the protocol requires.)
 const REQUIRED_CONFIRMATIONS = REVEAL_BROADCAST_CONFIRMATIONS;
 const POLL_INTERVAL_MS = 15_000;
-function mempoolTxUrl(address: string): string {
-  if (address.startsWith('tb1') || address.startsWith('2') || address.startsWith('m') || address.startsWith('n')) {
-    return 'https://mempool.space/testnet4/tx';
-  }
-  return 'https://mempool.space/tx';
+function mempoolTxUrl(wallet: Pick<WalletState, 'taprootAddress' | 'paymentAddress'> & { network?: WalletState['network'] }): string {
+  return mempoolExplorerTxBase(walletChain(wallet));
 }
 
 export default function WaitingPhase() {
@@ -124,10 +123,11 @@ export default function WaitingPhase() {
 
   // A parent committed-to but not yet re-resolved must block the reveal (else the linkage drops).
   const parentPending = hasParent && !!pendingParentId && !parentInscription;
+  const chain = walletChain(wallet);
   const revealNameGate = getRevealNameGate({
     runeName: etching.runeName,
     currentBlockHeight,
-    isTestnet: wallet.taprootAddress.startsWith('tb1') || wallet.paymentAddress.startsWith('tb1'),
+    isNonMainnet: isNonMainnet(chain),
     runeMinimum,
   });
   const revealNameLocked = revealNameGate.status === 'locked';
@@ -199,7 +199,7 @@ export default function WaitingPhase() {
         const fullPubkey = Buffer.from(wallet.publicKey, 'hex');
         const internalPubkey = fullPubkey.length === 33 ? fullPubkey.slice(1) : fullPubkey;
         const runeCommitment = runeNameToCommitmentBytes(etching.runeName);
-        const btcNetwork = bitcoinNetworkForAddress(wallet.taprootAddress);
+        const btcNetwork = bitcoinNetworkForWallet(wallet);
 
         let tapscript: Uint8Array;
         if (hasInscription && (inscriptionFile || delegateInscriptionId)) {
@@ -252,7 +252,7 @@ export default function WaitingPhase() {
       const tapscript = Buffer.from(tsHex, 'hex');
       const controlBlock = Buffer.from(cbHex, 'hex');
       const internalPubkey = Buffer.from(pkHex, 'hex');
-      const btcNetwork = bitcoinNetworkForAddress(wallet.taprootAddress);
+      const btcNetwork = bitcoinNetworkForWallet(wallet);
 
       const { psbt } = buildRevealTx({
         etching, commitState, tapscript, controlBlock, internalPubkey,
@@ -329,8 +329,8 @@ export default function WaitingPhase() {
     setGrindError(null);
     try {
       const w = await connectWallet(getActiveProvider());
-      await setMempoolNetwork(w.taprootAddress);
-      setOrdinalsTestnet(w.taprootAddress);
+      await setMempoolNetwork(walletChain(w));
+      setOrdinalsForWallet(w);
       setWallet(w);
       // Reset grind state so the effect re-triggers with new publicKey
       grindStartedRef.current = false;
@@ -409,7 +409,7 @@ export default function WaitingPhase() {
         internalPubkey,
         scriptTree,
         redeem: { output: Buffer.from(tapscript), redeemVersion: 0xc0 },
-        network: bitcoinNetworkForAddress(wallet.taprootAddress),
+        network: bitcoinNetworkForWallet(wallet),
       });
       const controlBlockWitness = redeemPayment.witness;
       const controlBlock = controlBlockWitness && controlBlockWitness.length > 0
@@ -426,6 +426,7 @@ export default function WaitingPhase() {
         delegateInscriptionId: delegateInscriptionId,
         parentInscriptionId: hasParent ? parentInscription?.inscriptionId ?? null : null,
         etching,
+        network: walletChain(wallet),
         taprootAddress: wallet.taprootAddress,
         revealFeeRateBudget: selectedRevealFeeRate ?? undefined,
       });
@@ -477,7 +478,7 @@ export default function WaitingPhase() {
         </div>
         {txid && (
           <a
-            href={`${mempoolTxUrl(wallet.taprootAddress || wallet.paymentAddress)}/${txid}`}
+            href={`${mempoolTxUrl(wallet)}/${txid}`}
             target="_blank"
             rel="noopener noreferrer"
             className="shrink-0 rounded-lg border border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-400 hover:border-orange-500 hover:text-orange-400 transition-colors"

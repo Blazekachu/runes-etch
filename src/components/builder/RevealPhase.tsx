@@ -11,8 +11,9 @@ import { formatLockedNameWarning, getRevealNameGate, type RevealNameGate } from 
 import { canBroadcastRevealAtCurrentConfirmations, getFreshRevealNameGate, REVEAL_BROADCAST_CONFIRMATIONS } from '@/lib/runes/revealSafety';
 import { signPsbt, connectWallet, getActiveProvider } from '@/lib/wallet/xverse';
 import { walletToPsbtKeys } from '@/lib/wallet/psbtKeys';
-import { broadcastTx, fetchFeeRates, getTxConfirmations, fetchUtxos, setMempoolNetwork, bitcoinNetworkForAddress } from '@/lib/api/mempool';
-import { getRuneNameStatus, setOrdinalsTestnet, resolveParentForReveal } from '@/lib/api/ordinals';
+import { broadcastTx, fetchFeeRates, getTxConfirmations, fetchUtxos, setMempoolNetwork, bitcoinNetworkForWallet } from '@/lib/api/mempool';
+import { getRuneNameStatus, setOrdinalsForWallet, resolveParentForReveal } from '@/lib/api/ordinals';
+import { isNonMainnet, walletChain } from '@/lib/network';
 import type { FeeRates } from '@/types';
 
 bitcoin.initEccLib(ecc);
@@ -102,8 +103,8 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
     setReconnecting(true);
     try {
       const w = await connectWallet(getActiveProvider());
-      await setMempoolNetwork(w.taprootAddress);
-      setOrdinalsTestnet(w.taprootAddress);
+      await setMempoolNetwork(walletChain(w));
+      setOrdinalsForWallet(w);
       setWallet(w);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to reconnect wallet');
@@ -113,9 +114,8 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
   }
 
   const needsReconnect = !wallet.publicKey;
-  const isTestnet =
-    wallet.taprootAddress.startsWith('tb1') ||
-    wallet.paymentAddress.startsWith('tb1');
+  const chain = walletChain(wallet);
+  const isNonMainnetChain = isNonMainnet(chain);
 
   async function handleReveal() {
     // Double-broadcast guard (ref-based)
@@ -137,7 +137,7 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
     setError(null);
     const revealNameGate = await getFreshRevealNameGate({
       runeName: etching.runeName,
-      isTestnet,
+      chain,
       fallbackBlockHeight: currentBlockHeight,
       fallbackRuneMinimum: runeMinimum,
     });
@@ -161,8 +161,8 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
       if (nameStatus.state === 'unknown') {
         const reason = nameStatus.reason === 'api-unavailable'
           ? 'Ord JSON API is unavailable for this name lookup (HTTP 406).'
-          : isTestnet && nameStatus.reason === 'indexer-wedged'
-          ? `Local testnet4 ord is wedged on a reorg (ord at ${nameStatus.indexerHeight}, tip at ${nameStatus.chainHeight}).`
+          : isNonMainnetChain && nameStatus.reason === 'indexer-wedged'
+          ? `Local signet ord is wedged on a reorg (ord at ${nameStatus.indexerHeight}, tip at ${nameStatus.chainHeight}).`
           : `Indexer is ${nameStatus.behind} blocks behind chain tip (ord at ${nameStatus.indexerHeight}, tip at ${nameStatus.chainHeight}).`;
         throw new Error(`${reason} Cannot confirm "${etching.runeName}" is still unused. Wait until the name check is trustworthy before broadcasting the reveal.`);
       }
@@ -221,7 +221,7 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
 
       let tapscript: Uint8Array;
       let controlBlock: Buffer;
-      const btcNetwork = bitcoinNetworkForAddress(wallet.taprootAddress);
+      const btcNetwork = bitcoinNetworkForWallet(wallet);
 
       if (cachedTapscriptHex && cachedControlBlockHex) {
         // Use cached data from bundle — guaranteed to match the commit TX
@@ -309,7 +309,7 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
         vanityNonce: new Uint8Array(0),
         psbtKeys: walletToPsbtKeys(wallet, internalPubkey),
         locktime: vanityLocktime ?? 0,
-        network: bitcoinNetworkForAddress(wallet.taprootAddress),
+        network: bitcoinNetworkForWallet(wallet),
       });
 
       // Vanity TXID verification: if vanity locktime, log expected TXID
@@ -362,7 +362,7 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
   const currentRevealNameGate = getRevealNameGate({
     runeName: etching.runeName,
     currentBlockHeight,
-    isTestnet,
+    isNonMainnet: isNonMainnetChain,
     runeMinimum,
   });
   const visibleRevealNameGate = freshRevealNameGate ?? currentRevealNameGate;

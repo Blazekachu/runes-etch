@@ -1,4 +1,5 @@
 import { getInscription, getOutput, isPublicOrdForCurrentNetwork } from '@/lib/api/ordinals';
+import { isNonMainnet, walletChain } from '@/lib/network';
 import type { ParentInscription } from '@/types';
 
 export type ParentResolveResult =
@@ -19,26 +20,27 @@ const TXID_REGEX = /^[0-9a-fA-F]{64}$/;
  *
  * ord knows the current location. We use it whenever it can answer for this network:
  *  - mainnet: always (public ordinals.com indexes mainnet)
- *  - testnet: only when a local indexer is configured (NEXT_PUBLIC_ORD_BASE_TESTNET);
- *    public ordinals.com is mainnet-only and would 404 a testnet id.
+ *  - signet: only when a local indexer is configured (NEXT_PUBLIC_ORD_BASE_SIGNET);
+ *    public ordinals.com is mainnet-only and would 404 a signet id.
+ *    (Same constraint applied on testnet4 before Aug 2026 migration.)
  *
  * The current location lives in the inscription's `satpoint` ("txid:vout:offset").
  * (Some ord builds omit the legacy `output` field — satpoint is always present.)
  *
- * Only when on testnet WITHOUT a local indexer do we fall back to the degraded
+ * Only when on signet WITHOUT a local indexer do we fall back to the degraded
  * genesis-outpoint guess (best-effort, can't verify ownership or that it's unspent).
  */
 export async function resolveParentInscription(
   id: string,
-  wallet: { taprootAddress: string; paymentAddress: string },
+  wallet: { taprootAddress: string; paymentAddress: string; network?: 'mainnet' | 'signet' | 'regtest' },
 ): Promise<ParentResolveResult> {
   const trimmed = id.trim();
   if (!INSCRIPTION_ID_REGEX.test(trimmed)) {
     return { ok: false, error: 'Invalid inscription ID format.' };
   }
 
-  const isTestnet = wallet.taprootAddress.startsWith('tb1');
-  const ordCanResolve = !isTestnet || !isPublicOrdForCurrentNetwork();
+  const chain = walletChain(wallet);
+  const ordCanResolve = !isNonMainnet(chain) || !isPublicOrdForCurrentNetwork();
 
   if (ordCanResolve) {
     try {
@@ -63,7 +65,7 @@ export async function resolveParentInscription(
     }
   }
 
-  // Degraded fallback — testnet with no local indexer. We cannot learn the current
+  // Degraded fallback — signet with no local indexer. We cannot learn the current
   // location or owner, so trust the user and best-effort the genesis outpoint.
   try {
     const [txid, indexStr] = trimmed.split('i');
@@ -78,6 +80,6 @@ export async function resolveParentInscription(
       owned: true,
     };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : 'Failed to verify on testnet' };
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to verify on signet' };
   }
 }

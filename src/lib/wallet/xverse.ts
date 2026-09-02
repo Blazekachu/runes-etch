@@ -1,7 +1,13 @@
-import Wallet, { AddressPurpose, RpcErrorCode } from 'sats-connect';
+import Wallet, { AddressPurpose, BitcoinNetworkType, RpcErrorCode } from 'sats-connect';
 import type { WalletState } from '@/types';
+import { parseWalletNetworkName } from '@/lib/network';
 
 export type WalletProvider = 'sats-connect' | 'leather';
+
+const REGTEST_ESPLORA_URL = (
+  process.env.NEXT_PUBLIC_ESPLORA_BASE_REGTEST ?? 'http://127.0.0.1:18443/api'
+).replace(/\/api\/?$/, '');
+const REGTEST_EXPLORER_URL = process.env.NEXT_PUBLIC_REGTEST_EXPLORER_URL ?? 'http://127.0.0.1:3003';
 
 const PROVIDER_KEY = 'runes-etch-wallet-provider';
 
@@ -13,6 +19,26 @@ function loadProvider(): WalletProvider {
 
 let activeProvider: WalletProvider = loadProvider();
 export function getActiveProvider(): WalletProvider { return activeProvider; }
+
+/** Register the local regtest stack with Xverse (one-time wallet setup).
+ *  Xverse uses `rpcUrl` for Esplora REST during PSBT signing (/address/.../utxo).
+ *  esplora-shim listens on :18443; bitcoind JSON-RPC is on :18444. */
+export async function addRegtestNetworkToXverse(switchNetwork = true): Promise<void> {
+  const response = await Wallet.request('wallet_addNetwork', {
+    chain: 'bitcoin',
+    type: BitcoinNetworkType.Regtest,
+    name: 'Local Regtest',
+    rpcUrl: REGTEST_ESPLORA_URL,
+    indexerUrl: REGTEST_ESPLORA_URL,
+    blockExplorerUrl: REGTEST_EXPLORER_URL,
+    switch: switchNetwork,
+  });
+
+  if (response.status === 'error') {
+    const msg = (response.error as { message?: string }).message ?? 'Failed to add regtest network';
+    throw new Error(msg);
+  }
+}
 
 export async function connectWallet(provider: WalletProvider = 'sats-connect'): Promise<WalletState> {
   activeProvider = provider;
@@ -40,7 +66,8 @@ export async function connectWallet(provider: WalletProvider = 'sats-connect'): 
     );
   }
 
-  const { addresses } = response.result;
+  const { addresses, network } = response.result;
+  const walletNetworkName = network?.bitcoin?.name;
 
   const ordinalsAddr = addresses.find((a) => a.purpose === AddressPurpose.Ordinals);
   const paymentAddr = addresses.find((a) => a.purpose === AddressPurpose.Payment);
@@ -56,7 +83,7 @@ export async function connectWallet(provider: WalletProvider = 'sats-connect'): 
   const paymentPubKey = paymentAddr.publicKey;
   const paymentAddressType = paymentAddr.addressType as WalletState['paymentAddressType'];
 
-  if (!tapAddr || !/^(bc1p|tb1p)[a-z0-9]{58}$/i.test(tapAddr)) {
+  if (!tapAddr || !/^(bc1p|tb1p|bcrt1p)[a-z0-9]{58}$/i.test(tapAddr)) {
     throw new Error(`Invalid taproot address from wallet: ${tapAddr?.slice(0, 20)}`);
   }
   if (!payAddr || payAddr.length < 20 || payAddr.length > 90) {
@@ -71,6 +98,7 @@ export async function connectWallet(provider: WalletProvider = 'sats-connect'): 
 
   return {
     connected: true,
+    network: parseWalletNetworkName(walletNetworkName, tapAddr),
     taprootAddress: tapAddr,
     paymentAddress: payAddr,
     publicKey: pubKey,
@@ -129,6 +157,7 @@ export function disconnectWallet(): WalletState {
     taprootAddress: '',
     paymentAddress: '',
     publicKey: '',
+    network: 'mainnet',
   };
 }
 
@@ -173,7 +202,9 @@ async function connectLeather(): Promise<WalletState> {
 
   // Fallback: detect by address prefix if type labels don't match
   if (!taprootAddr) {
-    taprootAddr = addresses.find((a) => a.address.startsWith('bc1p') || a.address.startsWith('tb1p'));
+    taprootAddr = addresses.find((a) =>
+      a.address.startsWith('bc1p') || a.address.startsWith('tb1p') || a.address.startsWith('bcrt1p'),
+    );
   }
   if (!paymentAddr) {
     paymentAddr = addresses.find((a) =>
@@ -227,6 +258,7 @@ async function connectLeather(): Promise<WalletState> {
 
   return {
     connected: true,
+    network: parseWalletNetworkName(undefined, tapAddr),
     taprootAddress: tapAddr,
     paymentAddress: payAddr,
     publicKey: pubKey,

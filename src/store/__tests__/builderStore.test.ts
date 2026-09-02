@@ -84,4 +84,66 @@ describe('builderStore product mode', () => {
     const persisted = JSON.parse(raw!);
     expect(persisted.state.bundleDownloaded).toBe(true);
   });
+
+  it('loadFromBundle clears commit-funding UTXO picker state', () => {
+    const store = useBuilderStore.getState();
+    store.setUtxos([{
+      txid: 'a'.repeat(64),
+      vout: 904,
+      value: 158_990,
+      status: { confirmed: true },
+      source: 'payment',
+      label: 'plain',
+      selected: true,
+    }]);
+    store.setTargetInput('abc');
+    store.setTargetUtxo({
+      txid: 'b'.repeat(64),
+      vout: 0,
+      value: 546,
+      satNumber: null,
+      inscriptionIds: [`${'c'.repeat(64)}i0`],
+      runeNames: [],
+    });
+
+    useBuilderStore.getState().loadFromBundle({
+      version: 1,
+      type: 'runes-etch-commit',
+      createdAt: new Date().toISOString(),
+      network: 'signet',
+      commitTxid: 'd'.repeat(64),
+      commitOutputIndex: 0,
+      commitOutputValue: 12_000,
+      runeName: 'AAAAAAAAAAAA',
+      targetUnlockHeight: 100_000,
+      tapscriptHex: '51',
+      controlBlockHex: 'c0',
+      internalPubkeyHex: '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
+      inscriptionFile: null,
+      delegateInscriptionId: null,
+      parentInscriptionId: `${'e'.repeat(64)}i0`,
+      etching: {
+        spacers: 0,
+        symbol: 'T',
+        divisibility: 0,
+        premine: '1',
+        terms: {
+          amount: '1',
+          cap: '10',
+          heightStart: null,
+          heightEnd: null,
+          offsetStart: null,
+          offsetEnd: null,
+        },
+        turbo: false,
+      },
+    });
+
+    const state = useBuilderStore.getState();
+    expect(state.phase).toBe('waiting');
+    expect(state.utxos).toEqual([]);
+    expect(state.targetUtxo).toBeNull();
+    expect(state.targetInput).toBe('');
+    expect(state.detectedReason).toBe('Resumed from commit bundle');
+  });
 });

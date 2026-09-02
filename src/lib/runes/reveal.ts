@@ -204,18 +204,28 @@ export function buildRevealTx(params: RevealTxParams): RevealTxResult {
 }
 
 /**
- * Extracts the unsigned transaction from the PSBT and returns the
- * non-witness serialization used for TXID computation.
+ * Extracts the transaction from the PSBT and returns the non-witness
+ * serialization used for TXID computation (matches Transaction.getId()).
+ *
+ * P2SH-P2WPKH inputs place the redeem script in scriptSig when signed; vanity
+ * grinding must include that push up front or the grinded locktime won't match
+ * the post-sign TXID.
  */
 export function serializeForTxid(psbt: bitcoin.Psbt): Uint8Array {
-  const tx = psbt.data.globalMap.unsignedTx;
-  if (!tx) throw new Error('PSBT has no unsigned transaction');
-  // bitcoinjs-lib PSBT stores the transaction as a Transaction object
-  // accessible via psbt.txVersion etc.; use the Transaction serialization.
   const txObj = (psbt as unknown as { __CACHE: { __TX: bitcoin.Transaction } }).__CACHE.__TX;
   if (!txObj) throw new Error('Cannot access raw transaction from PSBT cache');
-  // bypassSegwit = true gives legacy (non-witness) serialization for TXID
-  return txObj.toBuffer();
+
+  const tx = txObj.clone();
+  for (let i = 0; i < psbt.data.inputs.length; i++) {
+    const redeemScript = psbt.data.inputs[i].redeemScript;
+    if (redeemScript && redeemScript.length > 0) {
+      tx.setInputScript(i, bitcoin.script.compile([redeemScript]));
+    }
+  }
+
+  return (tx as unknown as {
+    __toBuffer: (buffer?: Uint8Array, initialOffset?: number, allowWitness?: boolean) => Uint8Array;
+  }).__toBuffer(undefined, undefined, false);
 }
 
 /**

@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { parseBundle } from '@/lib/bundle/import';
+import { isNonMainnet, walletChain } from '@/lib/network';
 
 import WalletHeader from '@/components/builder/WalletHeader';
 import OrdHealthBanner from '@/components/builder/OrdHealthBanner';
@@ -35,13 +36,13 @@ export default function EtchV2Page() {
   const loadFromBundle = useBuilderStore((s) => s.loadFromBundle);
   const bundleFileRef = useRef<HTMLInputElement>(null);
 
-  const isTestnet = wallet.taprootAddress.startsWith('tb1');
+  const isNonMainnetChain = isNonMainnet(walletChain(wallet));
 
   // Re-run auto-detection on relevant state changes
   useEffect(() => {
     if (phase !== 'building') return;
     redetect();
-  }, [phase, inscriptionFile, delegateInscriptionId, parentInscription, etching.runeName, currentBlockHeight, isTestnet, redetect]);
+  }, [phase, inscriptionFile, delegateInscriptionId, parentInscription, etching.runeName, currentBlockHeight, isNonMainnetChain, redetect]);
 
   // Auto-scroll to phase component when phase changes
   const phaseRef = useRef<HTMLDivElement>(null);
@@ -108,12 +109,15 @@ export default function EtchV2Page() {
         <SupplyMintSection />
         {productMode !== 'rune' && <InscriptionSection />}
         {productMode === 'parent-child' && <ParentSection />}
-        <VanitySection />
-        {productMode !== 'rune' && <SatTargetSection />}
-        <UtxoSection />
-        <FeeRateSection />
+        {phase === 'building' && (
+          <>
+            <VanitySection />
+            {productMode !== 'rune' && <SatTargetSection />}
+            <UtxoSection />
+            <FeeRateSection />
+          </>
+        )}
 
-        {/* TX Preview + Build Button */}
         <TxPreview />
         <BuildButton />
 

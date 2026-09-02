@@ -1,4 +1,4 @@
-import type { CommitBundle, CommitTxState, RuneEtching, InscriptionFile } from '@/types';
+import type { CommitBundle, CommitTxState, RuneEtching, InscriptionFile, BitcoinChain } from '@/types';
 import { computeUnlockHeight } from '@/lib/runes/names';
 
 interface ExportParams {
@@ -11,7 +11,9 @@ interface ExportParams {
   delegateInscriptionId: string | null;
   parentInscriptionId: string | null;
   etching: RuneEtching;
-  /** Address used to detect network (mainnet bc1p/testnet tb1p/signet) */
+  /** Wallet-reported chain (preferred over address-prefix guess). */
+  network?: BitcoinChain;
+  /** Legacy fallback when network not supplied. */
   taprootAddress?: string;
   /** Max reveal fee rate (sat/vB) the commit was funded for. Optional. */
   revealFeeRateBudget?: number;
@@ -21,16 +23,16 @@ export function createCommitBundle(params: ExportParams): CommitBundle {
   const {
     commitState, runeName, tapscript, controlBlock,
     internalPubkey, inscriptionFile, delegateInscriptionId, parentInscriptionId, etching,
-    taprootAddress, revealFeeRateBudget,
+    network, taprootAddress, revealFeeRateBudget,
   } = params;
 
-  const network = detectNetwork(taprootAddress);
+  const bundleNetwork = detectNetwork(network, taprootAddress);
 
   return {
     version: 1,
     type: 'runes-etch-commit',
     createdAt: new Date().toISOString(),
-    network,
+    network: bundleNetwork,
     commitTxid: commitState.txid,
     commitOutputIndex: commitState.commitOutputIndex,
     commitOutputValue: commitState.commitOutputValue,
@@ -112,9 +114,16 @@ function uint8ToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function detectNetwork(address?: string): 'mainnet' | 'testnet' | 'signet' {
+function detectNetwork(
+  chain?: BitcoinChain,
+  address?: string,
+): CommitBundle['network'] {
+  if (chain === 'regtest') return 'regtest';
+  if (chain === 'signet') return 'signet';
+  if (chain === 'mainnet') return 'mainnet';
   if (!address) return 'mainnet';
-  if (address.startsWith('tb1p')) return 'testnet';
-  if (address.startsWith('bcrt1p')) return 'signet';
+  if (address.startsWith('bcrt1')) return 'regtest';
+  // Legacy fallback: tb1 cannot distinguish signet from old testnet4 bundles.
+  if (address.startsWith('tb1p') || address.startsWith('tb1q')) return 'signet';
   return 'mainnet';
 }

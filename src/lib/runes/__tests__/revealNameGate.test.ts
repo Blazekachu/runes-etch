@@ -7,7 +7,7 @@ describe('getRevealNameGate', () => {
     const gate = getRevealNameGate({
       runeName: 'ZZZZZZ',
       currentBlockHeight: 951_350,
-      isTestnet: false,
+      isNonMainnet: false,
       runeMinimum: runeNameToU128('QOMKIH'),
     });
 
@@ -18,7 +18,7 @@ describe('getRevealNameGate', () => {
     const gate = getRevealNameGate({
       runeName: 'PUPPET',
       currentBlockHeight: 951_350,
-      isTestnet: false,
+      isNonMainnet: false,
       runeMinimum: runeNameToU128('QOMKIH'),
     });
 
@@ -30,11 +30,11 @@ describe('getRevealNameGate', () => {
     }
   });
 
-  it('classifies below-minimum testnet names as locked with the precise unlock height', () => {
+  it('classifies below-minimum signet names as locked with the precise unlock height', () => {
     const gate = getRevealNameGate({
       runeName: 'BUDDY',
       currentBlockHeight: 138_072,
-      isTestnet: true,
+      isNonMainnet: true,
       runeMinimum: runeNameToU128('CWKJN'),
     });
 
@@ -51,7 +51,7 @@ describe('getRevealNameGate', () => {
     const gate = getRevealNameGate({
       runeName: 'BAD1',
       currentBlockHeight: 951_350,
-      isTestnet: false,
+      isNonMainnet: false,
       runeMinimum: runeNameToU128('QOMKIH'),
     });
 

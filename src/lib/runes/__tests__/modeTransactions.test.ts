@@ -221,6 +221,7 @@ describe('mode transaction shapes', () => {
         changeAddress: paymentAddress,
         vanityNonce: new Uint8Array(0),
         network,
+        psbtKeys,
       });
 
       const values = txOutputValues(reveal.psbt);

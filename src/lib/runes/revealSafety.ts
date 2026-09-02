@@ -1,5 +1,7 @@
 import { getChainTipForChain } from '@/lib/api/mempool';
-import { getRuneMinimumFromOrdForNetwork } from '@/lib/api/ordinals';
+import { getRuneMinimumFromOrdForChain } from '@/lib/api/ordinals';
+import type { BitcoinChain } from '@/lib/network';
+import { isNonMainnet, ordChainName } from '@/lib/network';
 import { getRevealNameGate, type RevealNameGate } from './revealNameGate';
 
 export const REVEAL_BROADCAST_CONFIRMATIONS = 5;
@@ -10,20 +12,23 @@ export function canBroadcastRevealAtCurrentConfirmations(confirmations: number):
 
 export async function getFreshRevealNameGate(params: {
   runeName: string;
-  isTestnet: boolean;
+  chain: BitcoinChain;
+  /** @deprecated Prefer `chain`. Kept for tests — signet replaces testnet4. */
+  isTestnet?: boolean;
   fallbackBlockHeight: number;
   fallbackRuneMinimum: bigint | null;
   getCurrentBlockHeight?: () => Promise<number>;
   getCurrentBlockHeightForChain?: (chain: string) => Promise<number>;
   getRuneMinimumFromOrd?: () => Promise<bigint | null>;
 }): Promise<RevealNameGate> {
-  const chain = params.isTestnet ? 'testnet4' : 'bitcoin';
+  const chain = params.chain ?? (params.isTestnet ? 'signet' : 'mainnet');
+  const mempoolChain = ordChainName(chain);
   const fetchHeight = params.getCurrentBlockHeightForChain
-    ? () => params.getCurrentBlockHeightForChain!(chain)
+    ? () => params.getCurrentBlockHeightForChain!(mempoolChain)
     : params.getCurrentBlockHeight
       ? params.getCurrentBlockHeight
-      : () => getChainTipForChain(chain);
-  const fetchMinimum = params.getRuneMinimumFromOrd ?? (() => getRuneMinimumFromOrdForNetwork(params.isTestnet));
+      : () => getChainTipForChain(mempoolChain);
+  const fetchMinimum = params.getRuneMinimumFromOrd ?? (() => getRuneMinimumFromOrdForChain(chain));
 
   const [freshHeight, freshMinimum] = await Promise.all([
     fetchHeight().catch(() => params.fallbackBlockHeight),
@@ -33,7 +38,7 @@ export async function getFreshRevealNameGate(params: {
   return getRevealNameGate({
     runeName: params.runeName,
     currentBlockHeight: freshHeight,
-    isTestnet: params.isTestnet,
+    isNonMainnet: isNonMainnet(chain),
     runeMinimum: freshMinimum ?? params.fallbackRuneMinimum,
   });
 }

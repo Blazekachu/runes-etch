@@ -1,14 +1,17 @@
 import type { OrdRuneResponse, OrdInscriptionResponse, OrdOutputResponse, OrdSatResponse, ParentInscription, UtxoSatInfo } from '@/types';
-import { mempoolBaseForAddress, getChainTipForChain, chainForAddress } from './mempool';
+import type { BitcoinChain } from '@/lib/network';
+import { ordChainName, walletChain } from '@/lib/network';
+import { getChainTipForChain } from './mempool';
 import { runeNameToU128 } from '@/lib/runes/names';
+import type { WalletState } from '@/types';
 
 const PUBLIC_ORD_DEFAULT = 'https://ordinals.com';
 
 /**
  * Per-network ord base URL. Setting either env var lets the user point that network
- * at their own indexer (e.g. local testnet4 ord at 127.0.0.1:8080) while keeping the
- * other network on a public indexer. Legacy `NEXT_PUBLIC_ORD_BASE` still works as a
- * single-value fallback that applies to both networks (back-compat).
+ * at their own indexer (e.g. local signet ord at 127.0.0.1:8080) while keeping the
+ * other network on a public indexer. Legacy `NEXT_PUBLIC_ORD_BASE_TESTNET` still
+ * works as a fallback for signet (testnet4 era migration).
  */
 const ORD_BASE_MAINNET = (
   process.env.NEXT_PUBLIC_ORD_BASE_MAINNET ||
@@ -16,43 +19,62 @@ const ORD_BASE_MAINNET = (
   PUBLIC_ORD_DEFAULT
 ).replace(/\/+$/, '');
 
-const ORD_BASE_TESTNET = (
+const ORD_BASE_SIGNET = (
+  process.env.NEXT_PUBLIC_ORD_BASE_SIGNET ||
   process.env.NEXT_PUBLIC_ORD_BASE_TESTNET ||
   process.env.NEXT_PUBLIC_ORD_BASE ||
   PUBLIC_ORD_DEFAULT
 ).replace(/\/+$/, '');
 
+const ORD_BASE_REGTEST = (
+  process.env.NEXT_PUBLIC_ORD_BASE_REGTEST ||
+  'http://127.0.0.1:8081'
+).replace(/\/+$/, '');
+
 const FETCH_TIMEOUT_MS = 15000;
 
-/** Returns true if the current session is on testnet (set after wallet connect) */
-let _isTestnet = false;
+/** Active chain for the current session (set after wallet connect). */
+let _activeChain: BitcoinChain = 'mainnet';
+
+export function setOrdinalsChain(chain: BitcoinChain): void {
+  _activeChain = chain;
+}
+
+/** @deprecated Use setOrdinalsChain(walletChain(wallet)). Address prefix alone cannot distinguish signet. */
 export function setOrdinalsTestnet(address: string): void {
-  _isTestnet = address.startsWith('tb1') || address.startsWith('2') || address.startsWith('m') || address.startsWith('n');
+  _activeChain = address.startsWith('bcrt1') ? 'regtest'
+    : address.startsWith('tb1') || address.startsWith('2') || address.startsWith('m') || address.startsWith('n')
+      ? 'signet' : 'mainnet';
+}
+
+export function setOrdinalsForWallet(wallet: Pick<WalletState, 'network' | 'taprootAddress' | 'paymentAddress'>): void {
+  setOrdinalsChain(walletChain(wallet));
 }
 
 /** Active ord base for the current session's network. */
 function ordBase(): string {
-  return _isTestnet ? ORD_BASE_TESTNET : ORD_BASE_MAINNET;
+  if (_activeChain === 'regtest') return ORD_BASE_REGTEST;
+  if (_activeChain === 'signet') return ORD_BASE_SIGNET;
+  return ORD_BASE_MAINNET;
 }
 
-function ordBaseForNetwork(isTestnet: boolean): string {
-  return isTestnet ? ORD_BASE_TESTNET : ORD_BASE_MAINNET;
+function ordBaseForChain(chain: BitcoinChain): string {
+  if (chain === 'regtest') return ORD_BASE_REGTEST;
+  if (chain === 'signet') return ORD_BASE_SIGNET;
+  return ORD_BASE_MAINNET;
 }
 
 /**
  * True when the current network's ord base is the public default (ordinals.com).
- * Used to decide whether testnet calls should skip — they should only skip when
- * the user hasn't configured a custom testnet indexer (public ord is mainnet-only).
- *
- * Exported so parent-inscription resolution can decide whether ord is able to
- * answer for this network (always on mainnet, on testnet only with a local ord).
+ * Used to decide whether non-mainnet calls should skip — they should only skip when
+ * the user hasn't configured a custom indexer (public ord is mainnet-only).
  */
 export function isPublicOrdForCurrentNetwork(): boolean {
   return ordBase() === PUBLIC_ORD_DEFAULT;
 }
 
-function isPublicOrdForNetwork(isTestnet: boolean): boolean {
-  return ordBaseForNetwork(isTestnet) === PUBLIC_ORD_DEFAULT;
+function isPublicOrdForChain(chain: BitcoinChain): boolean {
+  return ordBaseForChain(chain) === PUBLIC_ORD_DEFAULT;
 }
 
 function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
@@ -106,11 +128,11 @@ const NAME_CHECK_LAG_THRESHOLD = 3;
  */
 export async function getRuneNameStatus(name: string): Promise<RuneNameStatus> {
   if (!RUNE_NAME_RE.test(name)) throw new Error(`Invalid rune name: ${name}`);
-  // Skip only when on testnet AND no custom testnet indexer is configured.
-  // Public ordinals.com is mainnet-only — querying it for a testnet name
-  // returns mainnet data, which is meaningless. With a local testnet ord
-  // configured via NEXT_PUBLIC_ORD_BASE_TESTNET, the check is meaningful.
-  if (_isTestnet && isPublicOrdForCurrentNetwork()) return { state: 'available' };
+  // Skip only when on signet AND no custom signet indexer is configured.
+  // Public ordinals.com is mainnet-only — querying it for a signet name
+  // returns mainnet data, which is meaningless. With a local signet ord
+  // configured via NEXT_PUBLIC_ORD_BASE_SIGNET, the check is meaningful.
+  if (_activeChain !== 'mainnet' && isPublicOrdForCurrentNetwork()) return { state: 'available' };
 
   const [runeRes, ordStatusRes] = await Promise.all([
     fetchWithTimeout(`${ordBase()}/rune/${encodeURIComponent(name)}`, {
@@ -154,7 +176,7 @@ export async function getRuneNameStatus(name: string): Promise<RuneNameStatus> {
     chain?: string;
   };
   const indexerHeight = ordStatus.height;
-  const chainHeight = await getChainTipForChain(ordStatus.chain ?? (_isTestnet ? 'testnet4' : 'bitcoin')).catch(() => -1);
+  const chainHeight = await getChainTipForChain(ordStatus.chain ?? ordChainName(_activeChain)).catch(() => -1);
   if (chainHeight < 0) return { state: 'available' };
   const behind = Math.max(0, chainHeight - indexerHeight);
   if (ordStatus.unrecoverably_reorged === true) {
@@ -179,33 +201,47 @@ export async function checkRuneNameAvailable(name: string): Promise<boolean> {
 
 /**
  * Fetch the chain's current rune-name minimum directly from ord's status.
- * ord computes this per chain (mainnet vs testnet4 vs regtest), so this is
+ * ord computes this per chain (mainnet vs signet vs regtest), so this is
  * authoritative for whatever chain the configured ord base points at.
  *
  * Used by callers to bypass the mainnet-only local `minimumAtHeight()`
- * computation, which is wrong on testnet4 (Finding #11 — burned fees on
- * silent cenotaph etches because the testnet branch was permissive).
+ * computation, which is wrong on signet (Finding #11 — first observed on
+ * testnet4: burned fees on silent cenotaph etches because the testnet branch
+ * was permissive without ord's live minimum).
  *
  * Returns null on any failure (ord unreachable, malformed response, public
- * ord queried for a testnet wallet). Callers should treat null as "couldn't
+ * ord queried for a signet wallet). Callers should treat null as "couldn't
  * measure — fall back to the legacy behavior or refuse to broadcast".
  */
 export async function getRuneMinimumFromOrd(): Promise<bigint | null> {
-  return getRuneMinimumFromOrdForNetwork(_isTestnet);
+  return getRuneMinimumFromOrdForChain(_activeChain);
 }
 
+export async function getRuneMinimumFromOrdForWallet(
+  wallet: Pick<WalletState, 'network' | 'taprootAddress' | 'paymentAddress'>,
+): Promise<bigint | null> {
+  return getRuneMinimumFromOrdForChain(walletChain(wallet));
+}
+
+/** @deprecated Prefer getRuneMinimumFromOrdForWallet. */
 export async function getRuneMinimumFromOrdForAddress(address?: string): Promise<bigint | null> {
-  return getRuneMinimumFromOrdForNetwork(chainForAddress(address) === 'testnet4');
+  return getRuneMinimumFromOrdForChain(
+    address?.startsWith('bcrt1') ? 'regtest'
+      : address && (address.startsWith('tb1') || address.startsWith('2') || address.startsWith('m') || address.startsWith('n'))
+        ? 'signet' : 'mainnet',
+  );
 }
 
-export async function getRuneStatusFromOrdForAddress(address?: string): Promise<{
+export async function getRuneStatusFromOrdForWallet(
+  wallet: Pick<WalletState, 'network' | 'taprootAddress' | 'paymentAddress'>,
+): Promise<{
   height: number | null;
   runeMinimum: bigint | null;
 }> {
-  const isTestnet = chainForAddress(address) === 'testnet4';
-  if (isTestnet && isPublicOrdForNetwork(isTestnet)) return { height: null, runeMinimum: null };
+  const chain = walletChain(wallet);
+  if (chain !== 'mainnet' && isPublicOrdForChain(chain)) return { height: null, runeMinimum: null };
   try {
-    const res = await fetchWithTimeout(`${ordBaseForNetwork(isTestnet)}/status`, {
+    const res = await fetchWithTimeout(`${ordBaseForChain(chain)}/status`, {
       headers: { Accept: 'application/json' },
     });
     if (!res.ok) return { height: null, runeMinimum: null };
@@ -223,12 +259,40 @@ export async function getRuneStatusFromOrdForAddress(address?: string): Promise<
   }
 }
 
-export async function getRuneMinimumFromOrdForNetwork(isTestnet: boolean): Promise<bigint | null> {
-  // Same skip as checkRuneNameAvailable: public ordinals.com is mainnet-only,
-  // queries for a testnet wallet would return mainnet rules.
-  if (isTestnet && isPublicOrdForNetwork(isTestnet)) return null;
+/** @deprecated Prefer getRuneStatusFromOrdForWallet. */
+export async function getRuneStatusFromOrdForAddress(address?: string): Promise<{
+  height: number | null;
+  runeMinimum: bigint | null;
+}> {
+  const chain: BitcoinChain = address?.startsWith('bcrt1') ? 'regtest'
+    : address && (address.startsWith('tb1') || address.startsWith('2') || address.startsWith('m') || address.startsWith('n'))
+      ? 'signet' : 'mainnet';
+  if (chain !== 'mainnet' && isPublicOrdForChain(chain)) return { height: null, runeMinimum: null };
   try {
-    const res = await fetchWithTimeout(`${ordBaseForNetwork(isTestnet)}/status`, {
+    const res = await fetchWithTimeout(`${ordBaseForChain(chain)}/status`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return { height: null, runeMinimum: null };
+    const data = (await res.json()) as {
+      height?: number;
+      minimum_rune_for_next_block?: string;
+    };
+    const minName = data.minimum_rune_for_next_block;
+    return {
+      height: typeof data.height === 'number' && Number.isFinite(data.height) ? data.height : null,
+      runeMinimum: minName && /^[A-Z]+$/.test(minName) ? runeNameToU128(minName) : null,
+    };
+  } catch {
+    return { height: null, runeMinimum: null };
+  }
+}
+
+export async function getRuneMinimumFromOrdForChain(chain: BitcoinChain): Promise<bigint | null> {
+  // Same skip as checkRuneNameAvailable: public ordinals.com is mainnet-only,
+  // queries for a signet wallet would return mainnet rules.
+  if (chain !== 'mainnet' && isPublicOrdForChain(chain)) return null;
+  try {
+    const res = await fetchWithTimeout(`${ordBaseForChain(chain)}/status`, {
       headers: { Accept: 'application/json' },
     });
     if (!res.ok) return null;
@@ -239,6 +303,11 @@ export async function getRuneMinimumFromOrdForNetwork(isTestnet: boolean): Promi
   } catch {
     return null;
   }
+}
+
+/** @deprecated Prefer getRuneMinimumFromOrdForChain. `isNonMainnet` covers signet (was testnet4). */
+export async function getRuneMinimumFromOrdForNetwork(isNonMainnet: boolean): Promise<bigint | null> {
+  return getRuneMinimumFromOrdForChain(isNonMainnet ? 'signet' : 'mainnet');
 }
 
 export async function getInscription(
@@ -265,9 +334,24 @@ export async function getOutput(
   return res.json();
 }
 
-/** Returns true if ord-based sat tracking is unavailable (testnet, no canonical ord indexer). */
+/** True when session chain is signet. */
+export function isOrdinalsSignet(): boolean {
+  return _activeChain === 'signet';
+}
+
+/** True when session chain is regtest. */
+export function isOrdinalsRegtest(): boolean {
+  return _activeChain === 'regtest';
+}
+
+/** True when session chain is any non-mainnet network. */
+export function isOrdinalsNonMainnet(): boolean {
+  return _activeChain !== 'mainnet';
+}
+
+/** @deprecated Use isOrdinalsSignet(). */
 export function isOrdinalsTestnet(): boolean {
-  return _isTestnet;
+  return isOrdinalsSignet();
 }
 
 /** Fetch a single sat's rarity / name / block from ord. */
@@ -284,14 +368,14 @@ const LABEL_CONCURRENCY = 5;
 
 /**
  * For each UTXO, fetch its first sat's rarity info via ord's /output then /sat.
- * Skips on testnet ONLY when no custom indexer is configured — with a local
- * testnet ord, rarity info is meaningful and we should query it.
+ * Skips on signet ONLY when no custom indexer is configured — with a local
+ * signet ord, rarity info is meaningful and we should query it.
  */
 export async function fetchUtxoSatInfo(
   utxos: Array<{ txid: string; vout: number }>
 ): Promise<Map<string, UtxoSatInfo>> {
   const result = new Map<string, UtxoSatInfo>();
-  if (_isTestnet && isPublicOrdForCurrentNetwork()) return result;
+  if (_activeChain !== 'mainnet' && isPublicOrdForCurrentNetwork()) return result;
 
   async function infoOne(utxo: { txid: string; vout: number }) {
     const key = `${utxo.txid}:${utxo.vout}`;
@@ -357,6 +441,18 @@ export async function labelUtxos(
 // Sat / inscription target resolution (manual-entry alternative to enumeration)
 // ---------------------------------------------------------------------------
 
+function normalizeSatNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
+  return null;
+}
+
+function firstSatFromOutput(output: OrdOutputResponse): number | null {
+  const range = output.sat_ranges?.[0];
+  if (!range || range.length < 1) return null;
+  const n = range[0];
+  return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 export type ResolveTargetInput =
   | { kind: 'sat'; satNumber: number }
   | { kind: 'inscription'; inscriptionId: string };
@@ -369,12 +465,12 @@ export type ResolveTargetResult =
       offset: number;
       value: number;
       address: string;
-      satNumber: number;
+      satNumber: number | null;
       inscriptionIds: string[];
       runeNames: string[];
     }
-  | { status: 'wrong-offset'; address: string; offset: number; satNumber: number }
-  | { status: 'not-owned'; currentAddress: string; satNumber: number }
+  | { status: 'wrong-offset'; address: string; offset: number; satNumber: number | null }
+  | { status: 'not-owned'; currentAddress: string; satNumber: number | null }
   | { status: 'not-found'; reason: string };
 
 /**
@@ -391,7 +487,7 @@ export async function resolveTarget(
   expectedOwnerAddress: string,
 ): Promise<ResolveTargetResult> {
   try {
-    let satNumber: number;
+    let satNumber: number | null;
     let satpoint: string;
     let address: string;
 
@@ -404,7 +500,7 @@ export async function resolveTarget(
       const insc = await getInscription(input.inscriptionId);
       satpoint = insc.satpoint;
       address = insc.address;
-      satNumber = insc.sat;
+      satNumber = normalizeSatNumber(insc.sat);
     }
 
     if (address !== expectedOwnerAddress) {
@@ -429,6 +525,9 @@ export async function resolveTarget(
 
     // Fetch the actual UTXO output to get value + label info
     const output = await getOutput(txid, vout);
+    if (satNumber === null) {
+      satNumber = firstSatFromOutput(output);
+    }
     return {
       status: 'ok',
       txid,

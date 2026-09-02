@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { getInscription } from '@/lib/api/ordinals';
 import { MAX_INSCRIPTION_SIZE } from '@/types';
+import { isNonMainnet, walletChain } from '@/lib/network';
 import SectionWrapper from './SectionWrapper';
 
 type InscriptionMode = 'file' | 'text' | 'delegate';
@@ -59,7 +60,7 @@ export default function InscriptionSection() {
   const delegateInscriptionId = useBuilderStore((s) => s.delegateInscriptionId);
   const setDelegateInscriptionId = useBuilderStore((s) => s.setDelegateInscriptionId);
   const wallet = useBuilderStore((s) => s.wallet);
-  const isTestnet = wallet.taprootAddress.startsWith('tb1');
+  const isNonMainnetChain = isNonMainnet(walletChain(wallet));
 
   const [inscriptionMode, setInscriptionMode] = useState<InscriptionMode>(() => {
     if (delegateInscriptionId) return 'delegate';
@@ -208,8 +209,8 @@ export default function InscriptionSection() {
     setDelegateVerify('loading');
     setDelegateError('');
 
-    // On testnet, skip ordinals.com — trust the ID format
-    if (isTestnet) {
+    // On signet without local ord, skip ordinals.com — trust the ID format
+    if (isNonMainnetChain) {
       setDelegateInscriptionId(id);
       setDelegateInfo({ contentType: 'testnet (unverified)', id });
       setDelegateVerify('ok');

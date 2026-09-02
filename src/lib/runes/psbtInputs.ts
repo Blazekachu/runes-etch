@@ -52,9 +52,9 @@ export function buildFundingPsbtInput(
   keys: PsbtKeyMaterial,
 ): Parameters<bitcoin.Psbt['addInput']>[0] {
   const address = utxo.address;
-  const isTaproot = address.startsWith('bc1p') || address.startsWith('tb1p');
+  const isTaproot = address.startsWith('bc1p') || address.startsWith('tb1p') || address.startsWith('bcrt1p');
   const isNestedSegwit = address.startsWith('3') || address.startsWith('2');
-  const isNativeSegwit = address.startsWith('bc1q') || address.startsWith('tb1q');
+  const isNativeSegwit = address.startsWith('bc1q') || address.startsWith('tb1q') || address.startsWith('bcrt1q');
   const isLegacyP2pkh = address.startsWith('1') || address.startsWith('m') || address.startsWith('n');
 
   if (isLegacyP2pkh) {

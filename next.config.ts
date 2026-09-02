@@ -7,6 +7,8 @@ import type { NextConfig } from "next";
 function buildOrdExtraOrigins(): string {
   const candidates = [
     process.env.NEXT_PUBLIC_ORD_BASE_MAINNET,
+    process.env.NEXT_PUBLIC_ORD_BASE_SIGNET,
+    process.env.NEXT_PUBLIC_ORD_BASE_REGTEST,
     process.env.NEXT_PUBLIC_ORD_BASE_TESTNET,
     process.env.NEXT_PUBLIC_ORD_BASE,
   ];
@@ -23,7 +25,18 @@ function buildOrdExtraOrigins(): string {
   return origins.size > 0 ? ' ' + [...origins].join(' ') : '';
 }
 
+function buildEsploraExtraOrigins(): string {
+  const raw = process.env.NEXT_PUBLIC_ESPLORA_BASE_REGTEST;
+  if (!raw) return ' http://127.0.0.1:18443';
+  try {
+    return ' ' + new URL(raw).origin;
+  } catch {
+    return '';
+  }
+}
+
 const ordExtraOrigin = buildOrdExtraOrigins();
+const esploraExtraOrigin = buildEsploraExtraOrigins();
 
 const nextConfig: NextConfig = {
   headers: async () => [
@@ -45,7 +58,7 @@ const nextConfig: NextConfig = {
             // modal (renders inline in the dapp page on `wallet_connect`).
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
             "font-src 'self' https://fonts.gstatic.com",
-            `connect-src 'self' https://mempool.space https://*.mempool.space https://mempool.emzy.de https://ordinals.com${ordExtraOrigin}`,
+            `connect-src 'self' https://mempool.space https://*.mempool.space https://mempool.emzy.de https://ordinals.com${ordExtraOrigin}${esploraExtraOrigin} http://127.0.0.1:3003`,
             "img-src 'self' data: blob:",
             "frame-ancestors 'none'",
           ].join('; '),

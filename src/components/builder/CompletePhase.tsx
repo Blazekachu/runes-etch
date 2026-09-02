@@ -1,12 +1,11 @@
 'use client';
 
 import { useBuilderStore } from '@/store/builderStore';
+import { mempoolExplorerTxBase, walletChain } from '@/lib/network';
+import type { WalletState } from '@/types';
 
-function mempoolTxUrl(address: string): string {
-  if (address.startsWith('tb1') || address.startsWith('2') || address.startsWith('m') || address.startsWith('n')) {
-    return 'https://mempool.space/testnet4/tx';
-  }
-  return 'https://mempool.space/tx';
+function mempoolTxUrl(wallet: Pick<WalletState, 'taprootAddress' | 'paymentAddress'> & { network?: WalletState['network'] }): string {
+  return mempoolExplorerTxBase(walletChain(wallet));
 }
 
 const ORDINALS_URL = 'https://ordinals.com/inscription';
@@ -19,7 +18,7 @@ export default function CompletePhase() {
   const reset = useBuilderStore((s) => s.reset);
 
   const txid = revealTxid || '';
-  const MEMPOOL_TX_URL = mempoolTxUrl(wallet.taprootAddress || wallet.paymentAddress);
+  const MEMPOOL_TX_URL = mempoolTxUrl(wallet);
 
   return (
     <div className="flex flex-col gap-6 items-center text-center py-8">

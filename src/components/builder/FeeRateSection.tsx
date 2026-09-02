@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { fetchFeeRates, setMempoolNetwork } from '@/lib/api/mempool';
+import { walletChain } from '@/lib/network';
 import { resolveFeeFromMode, type FeeMode } from '@/lib/fees/resolveFeeFromMode';
 import SectionWrapper from './SectionWrapper';
 
@@ -30,11 +31,11 @@ export default function FeeRateSection() {
   useEffect(() => {
     if (!wallet.connected || !wallet.taprootAddress) return;
     (async () => {
-      await setMempoolNetwork(wallet.taprootAddress);
+      await setMempoolNetwork(walletChain(wallet));
       loadFees();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wallet.connected, wallet.taprootAddress]);
+  }, [wallet.connected, wallet.taprootAddress, wallet.network]);
 
   // Sync commit rate. Custom input survives even when feeRates is null.
   useEffect(() => {

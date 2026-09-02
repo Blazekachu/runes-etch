@@ -14,13 +14,17 @@ export type RevealNameGate =
 export function getRevealNameGate(params: {
   runeName: string;
   currentBlockHeight: number;
-  isTestnet: boolean;
+  /** Non-mainnet chain (signet; was testnet4). Mainnet minimumAtHeight() is wrong here. */
+  isNonMainnet: boolean;
+  /** @deprecated Prefer isNonMainnet. */
+  isTestnet?: boolean;
   runeMinimum: bigint | null;
 }): RevealNameGate {
+  const isNonMainnet = params.isNonMainnet ?? params.isTestnet ?? false;
   const validation = validateRuneName(
     params.runeName,
     params.currentBlockHeight,
-    params.isTestnet,
+    isNonMainnet,
     params.runeMinimum,
   );
 

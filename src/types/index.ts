@@ -1,3 +1,7 @@
+import type { BitcoinChain } from '@/lib/network';
+
+export type { BitcoinChain };
+
 export type ProductMode = 'parent-child' | 'rune-inscription' | 'rune';
 
 // --- Builder v2 Phase ---
@@ -130,6 +134,8 @@ export interface WalletState {
   connected: boolean;
   taprootAddress: string;
   paymentAddress: string;
+  /** Wallet-reported chain (from sats-connect). Signet replaces testnet4 as dev chain. */
+  network: BitcoinChain;
   /** Ordinals (taproot) public key — hex, 32 or 33 bytes. */
   publicKey: string;
   /** Payment wallet public key — hex. Required for P2SH / payment taproot inputs. */
@@ -153,8 +159,8 @@ export interface OrdInscriptionResponse {
   content_type: string;
   /** "txid:vout:offset" — location of the inscription's sat within the UTXO. */
   satpoint: string;
-  /** Sat number this inscription is on. Used to resolve a delegate target back to its UTXO. */
-  sat: number;
+  /** Sat number this inscription is on. Absent when ord runs without --index-sats. */
+  sat?: number | null;
 }
 
 export interface OrdOutputResponse {
@@ -198,7 +204,8 @@ export interface CommitBundle {
   version: 1;
   type: 'runes-etch-commit';
   createdAt: string;
-  network: 'mainnet' | 'testnet' | 'signet';
+  /** `testnet` is a legacy bundle value from the testnet4 era — import treats it as signet. */
+  network: 'mainnet' | 'signet' | 'regtest' | 'testnet';
 
   commitTxid: string;
   commitOutputIndex: number;

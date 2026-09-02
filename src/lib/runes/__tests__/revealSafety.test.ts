@@ -19,7 +19,7 @@ describe('reveal safety gates', () => {
 
     const gate = await getFreshRevealNameGate({
       runeName: 'PUPPET',
-      isTestnet: false,
+      chain: 'mainnet',
       fallbackBlockHeight: 123,
       fallbackRuneMinimum: null,
       getCurrentBlockHeight,
@@ -35,23 +35,23 @@ describe('reveal safety gates', () => {
     }
   });
 
-  it('uses explicit testnet4 chain height for testnet reveal gating', async () => {
+  it('uses explicit signet chain height for non-mainnet reveal gating', async () => {
     const getCurrentBlockHeightForChain = vi.fn(async (chain: string) => {
-      expect(chain).toBe('testnet4');
+      expect(chain).toBe('signet');
       return 138072;
     });
     const getRuneMinimumFromOrd = vi.fn(async () => runeNameToU128('CWKJN'));
 
     const gate = await getFreshRevealNameGate({
       runeName: 'BUDDY',
-      isTestnet: true,
+      chain: 'signet',
       fallbackBlockHeight: 952494,
       fallbackRuneMinimum: null,
       getCurrentBlockHeightForChain,
       getRuneMinimumFromOrd,
     });
 
-    expect(getCurrentBlockHeightForChain).toHaveBeenCalledWith('testnet4');
+    expect(getCurrentBlockHeightForChain).toHaveBeenCalledWith('signet');
     expect(gate.status).toBe('locked');
     if (gate.status === 'locked') {
       expect(gate.currentHeight).toBe(138072);

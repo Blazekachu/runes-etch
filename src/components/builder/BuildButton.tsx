@@ -6,7 +6,8 @@ import { useBuilderStore } from '@/store/builderStore';
 import { buildCommitTx } from '@/lib/runes/commit';
 import { serializeForTxid } from '@/lib/runes/reveal';
 import { signPsbt } from '@/lib/wallet/xverse';
-import { broadcastTx, bitcoinNetworkForAddress } from '@/lib/api/mempool';
+import { broadcastTx, bitcoinNetworkForWallet } from '@/lib/api/mempool';
+import { walletChain } from '@/lib/network';
 import { getRuneNameStatus } from '@/lib/api/ordinals';
 import { VanityGrinder } from '@/lib/vanity/grinder';
 import { createCommitBundle, downloadBundle } from '@/lib/bundle/export';
@@ -79,9 +80,6 @@ export default function BuildButton() {
   // If the user entered a target but verification failed (not owned / wrong offset / not found),
   // refuse to build — the spec says: "show message and don't allow commit button to proceed".
   const targetBlocking = targetVerifyState === 'error';
-  const isTestnet =
-    wallet.taprootAddress.startsWith('tb1') ||
-    wallet.paymentAddress.startsWith('tb1');
 
   const productReady = isProductModeReady();
   const hasChild = !!inscriptionFile || !!delegateInscriptionId;
@@ -199,6 +197,7 @@ export default function BuildButton() {
         delegateInscriptionId: productMode !== 'rune' ? delegateInscriptionId : null,
         parentInscriptionId: productMode === 'parent-child' ? parentInscription?.inscriptionId ?? null : null,
         etching,
+        network: walletChain(wallet),
         taprootAddress: wallet.taprootAddress,
         revealFeeRateBudget: selectedRevealFeeRate ?? undefined,
       });
@@ -219,7 +218,7 @@ export default function BuildButton() {
   async function handleCommitReveal() {
     const internalPubkey = deriveInternalPubkey();
     const fundingUtxos = buildFundingUtxos();
-    const btcNetwork = bitcoinNetworkForAddress(wallet.taprootAddress);
+    const btcNetwork = bitcoinNetworkForWallet(wallet);
 
     const hasInscription = productMode !== 'rune';
     const hasCommitVanity = commitVanityConfig.prefix.length > 0 || commitVanityConfig.suffix.length > 0;

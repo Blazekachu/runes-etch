@@ -177,7 +177,9 @@ export function buildCommitTx(params: CommitTxParams): CommitTxResult {
   const commitOutputIndex = 0;
 
   // M3: Count P2WPKH vs P2TR inputs for accurate size estimate
-  const numTaprootInputs = fundingUtxos.filter((u) => u.address.startsWith('bc1p') || u.address.startsWith('tb1p')).length;
+  const numTaprootInputs = fundingUtxos.filter((u) =>
+    u.address.startsWith('bc1p') || u.address.startsWith('tb1p') || u.address.startsWith('bcrt1p'),
+  ).length;
   const numSegwitInputs = fundingUtxos.length - numTaprootInputs;
 
   // Estimate with 2 outputs first, then adjust if no change output

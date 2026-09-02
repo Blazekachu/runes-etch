@@ -5,13 +5,13 @@ import { useBuilderStore } from '@/store/builderStore';
 
 vi.mock('@/lib/api/mempool', () => ({
   getTxConfirmations: vi.fn(async () => 0),
-  bitcoinNetworkForAddress: vi.fn(() => 'testnet'),
+  bitcoinNetworkForWallet: vi.fn(() => 'testnet'),
   setMempoolNetwork: vi.fn(),
   fetchFeeRates: vi.fn(async () => ({ fastestFee: 5, halfHourFee: 3, economyFee: 1 })),
 }));
 
 vi.mock('@/lib/api/ordinals', () => ({
-  setOrdinalsTestnet: vi.fn(),
+  setOrdinalsForWallet: vi.fn(),
 }));
 
 vi.mock('@/lib/wallet/xverse', () => ({

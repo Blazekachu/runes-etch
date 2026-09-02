@@ -3,7 +3,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { fetchUtxos, setMempoolNetwork } from '@/lib/api/mempool';
-import { fetchUtxoSatInfo, isOrdinalsTestnet, setOrdinalsTestnet } from '@/lib/api/ordinals';
+import { fetchUtxoSatInfo, isPublicOrdForCurrentNetwork, isOrdinalsNonMainnet, setOrdinalsForWallet } from '@/lib/api/ordinals';
+import { walletChain } from '@/lib/network';
 import { estimateCommitFunding } from '@/lib/runes/commit';
 import type { LabeledUtxo, SatRarity } from '@/types';
 import SectionWrapper from './SectionWrapper';
@@ -23,6 +24,7 @@ function isSelectableStatic(
 
 export default function UtxoSection() {
   const wallet = useBuilderStore((s) => s.wallet);
+  const phase = useBuilderStore((s) => s.phase);
   const productMode = useBuilderStore((s) => s.productMode);
   const utxos = useBuilderStore((s) => s.utxos);
   const setUtxos = useBuilderStore((s) => s.setUtxos);
@@ -77,16 +79,18 @@ export default function UtxoSection() {
       : undefined;
 
   useEffect(() => {
+    if (phase !== 'building') return;
     if (!wallet.taprootAddress || !wallet.connected) return;
     // Validate address format before fetching (guard against stale localStorage data)
     if (!/^[a-zA-Z0-9]{26,90}$/.test(wallet.taprootAddress)) return;
     if (utxos.length > 0) return;
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wallet.taprootAddress]);
+  }, [wallet.taprootAddress, phase]);
 
   // Auto-select minimum UTXOs once loaded
   useEffect(() => {
+    if (phase !== 'building') return;
     if (utxos.length === 0 || autoSelectedRef.current) return;
     if (utxos.some((u) => u.selected)) return; // user already has a selection
     autoSelectedRef.current = true;
@@ -99,7 +103,7 @@ export default function UtxoSection() {
   // address if the user moved them with a non-ord-aware wallet, and we don't want to silently
   // miss them. Inscription/rune-labeled UTXOs are already filtered upstream.
   useEffect(() => {
-    if (utxos.length === 0 || isOrdinalsTestnet()) return;
+    if (utxos.length === 0 || (isOrdinalsNonMainnet() && isPublicOrdForCurrentNetwork())) return;
     const candidates = utxos.filter((u) => u.label === 'plain');
     const toFetch = candidates.filter((u) => !utxoSatInfo[`${u.txid}:${u.vout}`]);
     if (toFetch.length === 0) return;
@@ -122,8 +126,8 @@ export default function UtxoSection() {
     // Ensure module-level mempool/ordinals network state matches the address.
     // Critical when wallet was rehydrated from persist (handleConnect never ran).
     try {
-      await setMempoolNetwork(wallet.taprootAddress);
-      setOrdinalsTestnet(wallet.taprootAddress);
+      await setMempoolNetwork(walletChain(wallet));
+      setOrdinalsForWallet(wallet);
     } catch { /* setMempoolNetwork falls back to mainnet, non-fatal here */ }
 
     const errorMsgs: string[] = [];

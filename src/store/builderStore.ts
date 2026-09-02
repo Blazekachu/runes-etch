@@ -17,8 +17,8 @@ export interface TargetUtxo {
   txid: string;
   vout: number;
   value: number;
-  /** The sat# user targeted (must be at offset 0 of this UTXO for the etch to land on it). */
-  satNumber: number;
+  /** The sat# user targeted, when ord reports it. Null on signet ord without --index-sats. */
+  satNumber: number | null;
   /** Inscription IDs already on this UTXO (empty for plain target). Presence → auto reinscription. */
   inscriptionIds: string[];
   /** Rune names on this UTXO. Empty for plain. Non-empty + no inscriptions → user is stacking on a rune UTXO (allowed; new rune lands on the same UTXO). */
@@ -28,7 +28,9 @@ import { minimumAtHeight, runeNameToU128 } from '@/lib/runes/names';
 
 /** Max age of a persisted wallet connection before it's discarded on page load. */
 const WALLET_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const DISCONNECTED_WALLET: WalletState = { connected: false, taprootAddress: '', paymentAddress: '', publicKey: '' };
+const DISCONNECTED_WALLET: WalletState = {
+  connected: false, taprootAddress: '', paymentAddress: '', publicKey: '', network: 'mainnet',
+};
 
 // --- JSON serialization for BigInt and Uint8Array ---
 
@@ -359,7 +361,7 @@ export const useBuilderStore = create<BuilderStore>()(
       runeMinimum: null,
       setRuneMinimum: (m) => set({ runeMinimum: m }),
 
-      wallet: { connected: false, taprootAddress: '', paymentAddress: '', publicKey: '' },
+      wallet: { connected: false, taprootAddress: '', paymentAddress: '', publicKey: '', network: 'mainnet' },
       connectedAt: null,
       setWallet: (wallet) => set({ wallet, connectedAt: wallet.connected ? Date.now() : null }),
 
@@ -602,6 +604,16 @@ export const useBuilderStore = create<BuilderStore>()(
           // reveal fee selector at what the commit actually pre-funded. Null = unknown
           // (pre-feature bundles); reveal can pay up to whatever commit.vout[0] allows.
           selectedRevealFeeRate: bundle.revealFeeRateBudget ?? null,
+          // Commit is already on-chain — drop any in-session payment picker state so
+          // UtxoSection/TxPreview don't show stale funding UTXOs from before upload.
+          utxos: [],
+          primaryUtxoId: null,
+          utxoSatInfo: {},
+          targetInput: '',
+          targetUtxo: null,
+          targetVerifyState: 'idle',
+          targetVerifyError: '',
+          reinscribeMode: false,
         });
       },
 
@@ -613,7 +625,7 @@ export const useBuilderStore = create<BuilderStore>()(
         detectedReason: 'Named rune etch requires a name commitment (commit-reveal)',
         currentBlockHeight: 0,
         runeMinimum: null,
-        wallet: { connected: false, taprootAddress: '', paymentAddress: '', publicKey: '' },
+        wallet: { connected: false, taprootAddress: '', paymentAddress: '', publicKey: '', network: 'mainnet' },
         etching: { ...defaultEtching },
         inscriptionFile: null,
         delegateInscriptionId: null,
@@ -657,6 +669,13 @@ export const useBuilderStore = create<BuilderStore>()(
         if (!fresh) {
           state.wallet = DISCONNECTED_WALLET;
           state.connectedAt = null;
+        } else if (state.wallet.connected && !state.wallet.network) {
+          // Pre-signet persisted sessions lacked network — infer from addresses.
+          const tap = state.wallet.taprootAddress;
+          const pay = state.wallet.paymentAddress;
+          state.wallet.network = tap.startsWith('bcrt1') || pay.startsWith('bcrt1')
+            ? 'regtest'
+            : tap.startsWith('tb1') || pay.startsWith('tb1') ? 'signet' : 'mainnet';
         }
       },
       partialize: (state) => ({

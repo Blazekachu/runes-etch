@@ -123,8 +123,8 @@ export async function validateBundle(
 }
 
 function bundleNetwork(bundle: CommitBundle): bitcoin.Network {
-  if (bundle.network === 'testnet') return bitcoin.networks.testnet;
-  if (bundle.network === 'signet') return bitcoin.networks.testnet; // signet uses testnet params
+  // Legacy `testnet` bundles are from the testnet4 era — same bitcoinjs testnet params as signet.
+  if (bundle.network === 'testnet' || bundle.network === 'signet') return bitcoin.networks.testnet;
   return bitcoin.networks.bitcoin;
 }
 

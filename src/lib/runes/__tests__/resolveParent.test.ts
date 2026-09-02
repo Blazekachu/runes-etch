@@ -17,7 +17,7 @@ import { fetchUtxos } from '@/lib/api/mempool';
 
 const USER = 'tb1p58h0wl2d74za6lesf8u9ews0z7cq604085dgj4uprx9tktmreznqp4dvtg';
 const OTHER = 'tb1pgw439hxzr7vj0gzfqx69wl3plem4ne26kj7ktnuzj3lkpw5mmp3qhz7yv4';
-const wallet = { taprootAddress: USER, paymentAddress: 'tb1qqg6r55examplepaymentaddrxxxxxxxxxxxxxx' };
+const wallet = { taprootAddress: USER, paymentAddress: 'tb1qqg6r55examplepaymentaddrxxxxxxxxxxxxxx', network: 'signet' as const };
 
 // A parent that has MOVED: genesis output spent, now lives on a different UTXO.
 const GENESIS = '7c16f5d1998b8eabb3f94fe8547a77c36d46c7d16fc8d766528d7bc6b31e38cc';

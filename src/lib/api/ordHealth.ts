@@ -1,5 +1,5 @@
 import { getChainTipForChain } from './mempool';
-import { isOrdinalsTestnet } from './ordinals';
+import { isOrdinalsNonMainnet, isOrdinalsRegtest } from './ordinals';
 
 const PUBLIC_ORD_DEFAULT = 'https://ordinals.com';
 const ORD_BASE_MAINNET = (
@@ -7,10 +7,15 @@ const ORD_BASE_MAINNET = (
   process.env.NEXT_PUBLIC_ORD_BASE ||
   PUBLIC_ORD_DEFAULT
 ).replace(/\/+$/, '');
-const ORD_BASE_TESTNET = (
+const ORD_BASE_SIGNET = (
+  process.env.NEXT_PUBLIC_ORD_BASE_SIGNET ||
   process.env.NEXT_PUBLIC_ORD_BASE_TESTNET ||
   process.env.NEXT_PUBLIC_ORD_BASE ||
   PUBLIC_ORD_DEFAULT
+).replace(/\/+$/, '');
+const ORD_BASE_REGTEST = (
+  process.env.NEXT_PUBLIC_ORD_BASE_REGTEST ||
+  'http://127.0.0.1:8081'
 ).replace(/\/+$/, '');
 
 const FETCH_TIMEOUT_MS = 8000;
@@ -30,7 +35,7 @@ export const ORD_LAG_THRESHOLD = 3;
  *   `getRuneNameStatus` and `getRuneMinimumFromOrd` should be treated as stale.
  * - `unreachable`: ord /status or mempool chain tip fetch failed. Banner shows a
  *   muted yellow info — cannot prove healthy, cannot prove broken.
- * - `skipped`: testnet wallet + public ord base = mainnet-only data, query would
+ * - `skipped`: signet wallet + public ord base = mainnet-only data, query would
  *   be meaningless. Banner stays hidden.
  *
  * Wedge beats lag — `unrecoverably_reorged: true` returns `wedged` regardless of
@@ -45,7 +50,9 @@ export type OrdHealthStatus =
   | { state: 'skipped' };
 
 function ordBase(): string {
-  return isOrdinalsTestnet() ? ORD_BASE_TESTNET : ORD_BASE_MAINNET;
+  if (isOrdinalsRegtest()) return ORD_BASE_REGTEST;
+  if (isOrdinalsNonMainnet()) return ORD_BASE_SIGNET;
+  return ORD_BASE_MAINNET;
 }
 
 function isPublicOrdForCurrentNetwork(): boolean {
@@ -59,7 +66,7 @@ function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
 }
 
 export async function getOrdHealth(): Promise<OrdHealthStatus> {
-  if (isOrdinalsTestnet() && isPublicOrdForCurrentNetwork()) return { state: 'skipped' };
+  if (isOrdinalsNonMainnet() && isPublicOrdForCurrentNetwork()) return { state: 'skipped' };
 
   try {
     // Fetch ord /status FIRST so we can read the chain it is actually indexing,
@@ -77,7 +84,7 @@ export async function getOrdHealth(): Promise<OrdHealthStatus> {
     };
     if (typeof data.height !== 'number') return { state: 'unreachable' };
 
-    const chain = data.chain ?? (isOrdinalsTestnet() ? 'testnet4' : 'bitcoin');
+    const chain = data.chain ?? (isOrdinalsRegtest() ? 'regtest' : isOrdinalsNonMainnet() ? 'signet' : 'bitcoin');
     const chainHeight = await getChainTipForChain(chain);
     if (typeof chainHeight !== 'number') return { state: 'unreachable' };
     const indexerHeight = data.height;

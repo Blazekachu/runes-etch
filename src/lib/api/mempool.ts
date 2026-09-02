@@ -1,46 +1,64 @@
 import * as bitcoin from 'bitcoinjs-lib';
 import type { FeeRates, Utxo } from '@/types';
+import type { BitcoinChain, MempoolChainId } from '@/lib/network';
+import { isNonMainnetAddress, ordChainName, walletChain } from '@/lib/network';
+import type { WalletState } from '@/types';
 
-/** Returns the bitcoinjs-lib network object for the given address */
+/** Returns the bitcoinjs-lib network object for the given chain. */
+export function bitcoinNetworkForChain(chain: BitcoinChain): bitcoin.Network {
+  if (chain === 'mainnet') return bitcoin.networks.bitcoin;
+  if (chain === 'regtest') return bitcoin.networks.regtest;
+  return bitcoin.networks.testnet;
+}
+
+/** @deprecated Prefer bitcoinNetworkForChain(walletChain(wallet)). tb1/bcrt1 ⇒ testnet params. */
 export function bitcoinNetworkForAddress(address?: string): bitcoin.Network {
-  if (address && (address.startsWith('tb1') || address.startsWith('2') || address.startsWith('m') || address.startsWith('n'))) {
+  if (address && isNonMainnetAddress(address)) {
     return bitcoin.networks.testnet;
   }
   return bitcoin.networks.bitcoin;
 }
 
+export function bitcoinNetworkForWallet(wallet: Pick<WalletState, 'network' | 'taprootAddress' | 'paymentAddress'>): bitcoin.Network {
+  return bitcoinNetworkForChain(walletChain(wallet));
+}
+
 const MEMPOOL_MAINNET = 'https://mempool.space/api';
+const MEMPOOL_SIGNET = 'https://mempool.space/signet/api';
 const MEMPOOL_TESTNET4 = 'https://mempool.space/testnet4/api';
 const MEMPOOL_TESTNET3 = 'https://mempool.space/testnet/api';
 
-// Fallback providers (Punch List #5). All speak the mempool.space Esplora API,
-// so they're drop-in. mempool.space is primary; mempool.emzy.de is a community
-// mirror that ALSO serves testnet4 — the only public testnet4 fallback
-// (blockstream.info has no testnet4). When the primary is unreachable or 5xx,
-// calls transparently fail over to the next provider, and the working one is
-// remembered for the session so a downed primary isn't re-tried on every call.
+// Fallback providers (Punch List #5). mempool.space is primary; mempool.emzy.de is a
+// community mirror. When the primary is unreachable or 5xx, calls transparently fail
+// over to the next provider, and the working one is remembered for the session.
 const EMZY_MAINNET = 'https://mempool.emzy.de/api';
+const EMZY_SIGNET = 'https://mempool.emzy.de/signet/api';
 const EMZY_TESTNET4 = 'https://mempool.emzy.de/testnet4/api';
 const EMZY_TESTNET3 = 'https://mempool.emzy.de/testnet/api';
 
-const PROVIDERS: Record<'mainnet' | 'testnet4' | 'testnet3', string[]> = {
+const ESPLORA_REGTEST = (
+  process.env.NEXT_PUBLIC_ESPLORA_BASE_REGTEST ?? 'http://127.0.0.1:18443/api'
+).replace(/\/+$/, '');
+
+const PROVIDERS: Record<MempoolChainId | 'mainnet', string[]> = {
   mainnet: [MEMPOOL_MAINNET, EMZY_MAINNET],
+  bitcoin: [MEMPOOL_MAINNET, EMZY_MAINNET],
+  signet: [MEMPOOL_SIGNET, EMZY_SIGNET],
+  regtest: [ESPLORA_REGTEST],
+  // Legacy testnet4 providers — kept so ord `/status` chain=testnet4 still resolves
+  // correctly if an old indexer response is seen during migration.
   testnet4: [MEMPOOL_TESTNET4, EMZY_TESTNET4],
   testnet3: [MEMPOOL_TESTNET3, EMZY_TESTNET3],
 };
 
-function isTestnetAddress(address?: string): boolean {
-  return !!address && (address.startsWith('tb1') || address.startsWith('2') || address.startsWith('m') || address.startsWith('n'));
+/** @deprecated Use walletChain() — tb1 addresses cannot distinguish signet from legacy testnet4. */
+export function chainForAddress(address?: string): MempoolChainId {
+  return isNonMainnetAddress(address) ? 'signet' : 'bitcoin';
 }
 
-export function chainForAddress(address?: string): 'bitcoin' | 'testnet4' {
-  return isTestnetAddress(address) ? 'testnet4' : 'bitcoin';
-}
-
-/** Detect network from address prefix and return the primary API base.
- *  (Kept for direct/display use; live fetches go through the fallback list.) */
+/** @deprecated Prefer setMempoolNetwork(chain). */
 export function mempoolBaseForAddress(address?: string): string {
-  return isTestnetAddress(address) ? MEMPOOL_TESTNET4 : MEMPOOL_MAINNET;
+  return isNonMainnetAddress(address) ? MEMPOOL_SIGNET : MEMPOOL_MAINNET;
 }
 
 // Ordered provider list for the current session, set by setMempoolNetwork().
@@ -75,15 +93,14 @@ function mempoolFetch(path: string, init?: RequestInit, timeoutMs?: number): Pro
 }
 
 /** Call once at wallet connect to set the API provider list for the session.
- *  `tb1…/2…/m…/n…` ⇒ testnet4 (our stack); everything else ⇒ mainnet.
- *
- *  We do NOT probe-then-downgrade to testnet3 (Punch List #8): testnet3 is legacy/
- *  dead, and a transient testnet4-provider outage at connect time must never misroute
- *  the whole session onto a network the wallet isn't on. Per-call provider fallback
+ *  Chain comes from the wallet (sats-connect network), NOT address prefix alone —
+ *  signet and legacy testnet4 share tb1 addresses. Per-call provider fallback
  *  within the chosen network (mempool.space → mempool.emzy.de) still applies. */
-export async function setMempoolNetwork(address: string): Promise<void> {
+export async function setMempoolNetwork(chain: BitcoinChain): Promise<void> {
   preferredProviderIdx = 0;
-  activeBases = isTestnetAddress(address) ? PROVIDERS.testnet4 : PROVIDERS.mainnet;
+  if (chain === 'regtest') activeBases = PROVIDERS.regtest;
+  else if (chain === 'signet') activeBases = PROVIDERS.signet;
+  else activeBases = PROVIDERS.mainnet;
 }
 
 const FETCH_TIMEOUT_MS = 15000;
@@ -285,6 +302,13 @@ export async function getCurrentBlockHeight(): Promise<number> {
   return height;
 }
 
+export async function getCurrentBlockHeightForWallet(
+  wallet: Pick<WalletState, 'network' | 'taprootAddress' | 'paymentAddress'>,
+): Promise<number> {
+  return getChainTipForChain(ordChainName(walletChain(wallet)));
+}
+
+/** @deprecated Prefer getCurrentBlockHeightForWallet. */
 export async function getCurrentBlockHeightForAddress(address?: string): Promise<number> {
   return getChainTipForChain(chainForAddress(address));
 }
@@ -293,10 +317,11 @@ export async function getCurrentBlockHeightForAddress(address?: string): Promise
  *  in its /status `chain` field. Unknown chains fall back to mainnet. */
 function providersForChain(chain: string): string[] {
   switch (chain) {
+    case 'regtest': return PROVIDERS.regtest;
+    case 'signet': return PROVIDERS.signet;
     case 'testnet4': return PROVIDERS.testnet4;
     case 'testnet':
     case 'testnet3': return PROVIDERS.testnet3;
-    case 'signet': return ['https://mempool.space/signet/api', 'https://mempool.emzy.de/signet/api'];
     default: return PROVIDERS.mainnet; // bitcoin / main / mainnet / unknown
   }
 }

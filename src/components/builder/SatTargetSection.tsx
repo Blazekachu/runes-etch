@@ -79,16 +79,23 @@ export default function SatTargetSection() {
       case 'not-owned':
         setTargetVerifyState('error');
         setTargetVerifyError(
-          `You need to hold this in your wallet to etch on it. Sat #${result.satNumber} is currently at ` +
-          `${truncateAddr(result.currentAddress)} — not your taproot.`,
+          result.satNumber !== null
+            ? `You need to hold this in your wallet to etch on it. Sat #${result.satNumber.toLocaleString()} is currently at ` +
+              `${truncateAddr(result.currentAddress)} — not your taproot.`
+            : `You need to hold this target in your wallet to etch on it. It is currently at ` +
+              `${truncateAddr(result.currentAddress)} — not your taproot.`,
         );
         break;
       case 'wrong-offset':
         setTargetVerifyState('error');
         setTargetVerifyError(
-          `Sat #${result.satNumber} is at offset ${result.offset.toLocaleString()} of its UTXO, not 0. ` +
-          `The etch's inscription/rune lands on the FIRST sat of vin[0], so this target sat must be at offset 0. ` +
-          `Split the UTXO in an ord-aware wallet first, then retry.`,
+          result.satNumber !== null
+            ? `Sat #${result.satNumber.toLocaleString()} is at offset ${result.offset.toLocaleString()} of its UTXO, not 0. ` +
+              `The etch's inscription/rune lands on the FIRST sat of vin[0], so this target sat must be at offset 0. ` +
+              `Split the UTXO in an ord-aware wallet first, then retry.`
+            : `This target is at offset ${result.offset.toLocaleString()} of its UTXO, not 0. ` +
+              `The etch's inscription/rune lands on the FIRST sat of vin[0], so the target must be at offset 0. ` +
+              `Split the UTXO in an ord-aware wallet first, then retry.`,
         );
         break;
       case 'not-found':
@@ -124,9 +131,15 @@ export default function SatTargetSection() {
 
   let badge: string | undefined;
   if (verified && targetUtxo) {
-    badge = targetUtxo.inscriptionIds.length > 0
-      ? `reinscribe on sat ${targetUtxo.satNumber}`
-      : `target sat ${targetUtxo.satNumber}`;
+    if (targetUtxo.inscriptionIds.length > 0 || INSCRIPTION_ID_RE.test(targetInput.trim())) {
+      badge = targetUtxo.satNumber !== null
+        ? `reinscribe on sat ${targetUtxo.satNumber}`
+        : 'reinscribe on inscription';
+    } else {
+      badge = targetUtxo.satNumber !== null
+        ? `target sat ${targetUtxo.satNumber}`
+        : 'target verified';
+    }
   }
 
   return (
@@ -175,7 +188,7 @@ export default function SatTargetSection() {
               UTXO: {targetUtxo.txid}:{targetUtxo.vout} · {targetUtxo.value.toLocaleString()} sats
             </span>
             <span className="text-xs text-gray-400">
-              Sat #{targetUtxo.satNumber.toLocaleString()} — will be vin[0] of the commit.
+              {formatTargetDetail(targetUtxo.satNumber, targetInput, targetUtxo.inscriptionIds)}
             </span>
             {targetUtxo.inscriptionIds.length > 0 && (
               <span className="text-xs text-purple-300">
@@ -208,4 +221,28 @@ export default function SatTargetSection() {
 function truncateAddr(a: string): string {
   if (a.length <= 18) return a;
   return `${a.slice(0, 10)}…${a.slice(-6)}`;
+}
+
+function truncateInscriptionId(id: string): string {
+  const idx = id.lastIndexOf('i');
+  if (idx <= 0) return id.slice(0, 12) + '…';
+  return `${id.slice(0, 8)}…i${id.slice(idx + 1)}`;
+}
+
+function formatTargetDetail(
+  satNumber: number | null,
+  targetInput: string,
+  inscriptionIds: string[],
+): string {
+  if (satNumber !== null) {
+    return `Sat #${satNumber.toLocaleString()} — will be vin[0] of the commit.`;
+  }
+  const trimmed = targetInput.trim().toLowerCase();
+  if (INSCRIPTION_ID_RE.test(trimmed)) {
+    return `Inscription ${truncateInscriptionId(trimmed)} — will be vin[0] of the commit (sat # unavailable; ord has no sat index).`;
+  }
+  if (inscriptionIds.length > 0) {
+    return `Inscription ${truncateInscriptionId(inscriptionIds[0])} — will be vin[0] of the commit (sat # unavailable; ord has no sat index).`;
+  }
+  return 'Target UTXO verified at offset 0 — will be vin[0] of the commit.';
 }

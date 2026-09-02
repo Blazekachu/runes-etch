@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { getRuneNameStatus, checkRuneNameAvailable, getRuneMinimumFromOrd, setOrdinalsTestnet, resolveParentForReveal } from '../ordinals';
+import {
+  getRuneNameStatus,
+  checkRuneNameAvailable,
+  getRuneMinimumFromOrd,
+  setOrdinalsChain,
+  resolveParentForReveal,
+  resolveTarget,
+} from '../ordinals';
 
 /**
  * Tests for Finding #10 — ord 404 must not silently mean "name is available"
@@ -46,7 +53,7 @@ describe('resolveParentForReveal (#12 — current location via satpoint, no `out
   const CURRENT = 'ea1cf4c7586eb19171b5205c0827cc3fc905d5682267e84ebc2339ac9779c377';
   const ID = `${GENESIS}i0`;
 
-  beforeEach(() => setOrdinalsTestnet('bc1qany')); // fetch is fully mocked; network irrelevant here
+  beforeEach(() => setOrdinalsChain('mainnet')); // fetch is fully mocked; network irrelevant here
 
   // ord build that returns `satpoint` and NO legacy `output` field (the #12 trap).
   function mockOrd(address: string) {
@@ -90,7 +97,7 @@ describe('resolveParentForReveal (#12 — current location via satpoint, no `out
 describe('getRuneNameStatus (Finding #10 — lag-aware rune lookup)', () => {
   beforeEach(() => {
     // Force mainnet path so the testnet-public-ord short-circuit doesn't apply.
-    setOrdinalsTestnet('bc1qxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx');
+    setOrdinalsChain('mainnet');
   });
 
   it('returns "taken" when ord returns 200 with rune data', async () => {
@@ -219,7 +226,7 @@ describe('getRuneNameStatus (Finding #10 — lag-aware rune lookup)', () => {
 
 describe('checkRuneNameAvailable (backwards-compat wrapper)', () => {
   beforeEach(() => {
-    setOrdinalsTestnet('bc1qxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx');
+    setOrdinalsChain('mainnet');
   });
 
   it('returns true when status is "available"', async () => {
@@ -250,7 +257,7 @@ describe('checkRuneNameAvailable (backwards-compat wrapper)', () => {
 
 describe('getRuneMinimumFromOrd (Finding #11)', () => {
   beforeEach(() => {
-    setOrdinalsTestnet('bc1qxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx');
+    setOrdinalsChain('mainnet');
   });
 
   function installStatusMock(minName: string | undefined, status = 200) {
@@ -293,5 +300,70 @@ describe('getRuneMinimumFromOrd (Finding #11)', () => {
   it('returns null on fetch failure (network/timeout/abort)', async () => {
     global.fetch = vi.fn(async () => { throw new Error('network down'); }) as unknown as typeof fetch;
     expect(await getRuneMinimumFromOrd()).toBeNull();
+  });
+});
+
+describe('resolveTarget — inscription without sat index (signet ord)', () => {
+  const USER = 'tb1p58h0wl2d74za6lesf8u9ews0z7cq604085dgj4uprx9tktmreznqp4dvtg';
+  const TXID = 'a'.repeat(64);
+  const ID = `${TXID}i0`;
+
+  beforeEach(() => setOrdinalsChain('signet'));
+
+  it('returns ok with satNumber null when ord omits inscription.sat (no --index-sats)', async () => {
+    global.fetch = vi.fn(async (url: string | URL) => {
+      const u = url.toString();
+      if (u.includes('/inscription/')) {
+        return new Response(
+          JSON.stringify({ id: ID, address: USER, satpoint: `${TXID}:0:0`, sat: null }),
+          { status: 200 },
+        );
+      }
+      if (u.includes(`/output/${TXID}:0`)) {
+        return new Response(
+          JSON.stringify({ address: USER, inscriptions: [ID], runes: {}, value: 10_000 }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`Unmocked fetch: ${u}`);
+    }) as unknown as typeof fetch;
+
+    const r = await resolveTarget({ kind: 'inscription', inscriptionId: ID }, USER);
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') {
+      expect(r.satNumber).toBeNull();
+      expect(r.txid).toBe(TXID);
+      expect(r.vout).toBe(0);
+      expect(r.inscriptionIds).toEqual([ID]);
+    }
+  });
+
+  it('falls back to output sat_ranges when inscription.sat is missing', async () => {
+    global.fetch = vi.fn(async (url: string | URL) => {
+      const u = url.toString();
+      if (u.includes('/inscription/')) {
+        return new Response(
+          JSON.stringify({ id: ID, address: USER, satpoint: `${TXID}:0:0` }),
+          { status: 200 },
+        );
+      }
+      if (u.includes(`/output/${TXID}:0`)) {
+        return new Response(
+          JSON.stringify({
+            address: USER,
+            inscriptions: [ID],
+            runes: {},
+            value: 10_000,
+            sat_ranges: [[1234567890, 1234567891]],
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`Unmocked fetch: ${u}`);
+    }) as unknown as typeof fetch;
+
+    const r = await resolveTarget({ kind: 'inscription', inscriptionId: ID }, USER);
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') expect(r.satNumber).toBe(1234567890);
   });
 });

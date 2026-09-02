@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { getOrdHealth, type OrdHealthStatus } from '@/lib/api/ordHealth';
-import { isOrdinalsTestnet } from '@/lib/api/ordinals';
+import { isOrdinalsNonMainnet } from '@/lib/api/ordinals';
 
 const POLL_INTERVAL_MS = 30_000;
 
@@ -63,8 +63,8 @@ export default function OrdHealthBanner() {
               {health.chainHeight.toLocaleString()}). The block gap isn&apos;t the issue —
               the index is internally stale until ord recovers, so rune-name uniqueness
               and minimum checks can&apos;t be trusted.{' '}
-              {isOrdinalsTestnet()
-                ? 'There is no public testnet4 indexer to fall back on — wait for the local ord to recover before trusting name checks or broadcasting.'
+              {isOrdinalsNonMainnet()
+                ? 'There is no public non-mainnet indexer to fall back on — wait for the local ord to recover before trusting name checks or broadcasting.'
                 : 'Verify names out-of-band via mempool.space, ordiscan, or ord.net before broadcasting.'}
             </p>
           </div>

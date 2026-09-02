@@ -1,8 +1,8 @@
 # Runes Etch
 
-**Self-custodial Bitcoin Runes etching tool.** Web-based, client-side only, no backend. Etch new runes on Bitcoin **mainnet** or **testnet4** — with an optional inscription, optional parent linkage, vanity TXID grinding, and full bundle recovery — without ever handing over your keys.
+**Self-custodial Bitcoin Runes etching tool.** Web-based, client-side only, no backend. Etch new runes on Bitcoin **mainnet** or **signet** — with an optional inscription, optional parent linkage, vanity TXID grinding, and full bundle recovery — without ever handing over your keys.
 
-> Status: v2 three-mode commit-reveal flow · 160 automated tests passing · `tsc` + production build clean · testnet4 end-to-end re-validation in progress
+> Status: v2 three-mode commit-reveal flow · 177 automated tests passing · signet replaces testnet4 as the dev chain (Aug 2026)
 
 ---
 
@@ -26,7 +26,7 @@ A rune that's etched with a bad name is silently destroyed (a *cenotaph*) — th
 
 - **Name availability is re-checked before the commit *and* again immediately before the reveal**, against a live indexer.
 - The reveal is **blocked** if the name is already etched, or if the indexer can't currently be trusted (lagging or wedged on a reorg) — with a distinct, actionable message for each case.
-- The reveal is **blocked** if the name is still below the chain's current rune-name minimum, with the **exact unlock block** shown (mainnet computed from activation; testnet4 inferred from your ord's reported minimum). An explicit advanced override is required to proceed anyway.
+- The reveal is **blocked** if the name is still below the chain's current rune-name minimum, with the **exact unlock block** shown (mainnet computed from activation; signet inferred from your ord's reported minimum). An explicit advanced override is required to proceed anyway.
 - The reveal only unlocks at **5 commit confirmations**, so it lands at the protocol-required 6th confirmation.
 
 ### Correct ordinal routing (no lost inscriptions)
@@ -65,8 +65,8 @@ In the inscription modes you can paste a **sat number or inscription ID** as the
 
 ### Resilient data providers
 
-- **mempool.space** is primary; **mempool.emzy.de** is an automatic fallback for UTXOs, fees, tip height, and **broadcast** — on both mainnet and testnet4 (the only public testnet4 mirror).
-- Network is detected from your address prefix; testnet4 never silently downgrades to testnet3.
+- **mempool.space** is primary; **mempool.emzy.de** is an automatic fallback for UTXOs, fees, tip height, and **broadcast** — on both mainnet and signet.
+- Network is detected from your **wallet** (sats-connect reports Signet/Mainnet); signet and legacy testnet4 share `tb1` addresses so prefix alone is not used.
 - An **ord-health banner** warns when your indexer is lagging or wedged on a reorg, with network-aware recovery advice.
 
 ### Bundle recovery
@@ -77,8 +77,8 @@ In the inscription modes you can paste a **sat number or inscription ID** as the
 
 ### Wallets
 
-- **Xverse** — via `sats-connect` `wallet_connect` (provides both the Ordinals/taproot and Payment addresses). Recommended, and required for testnet4 inscription/parent flows.
-- **Leather** — direct `window.LeatherProvider`. Note: on testnet Leather returns a **segwit address only (no taproot)**, so use Xverse for testnet4 etches that need a taproot.
+- **Xverse** — via `sats-connect` `wallet_connect` (provides both the Ordinals/taproot and Payment addresses, plus network). Recommended, and required for signet inscription/parent flows.
+- **Leather** — direct `window.LeatherProvider`. Note: on non-mainnet Leather may return a **segwit address only (no taproot)**, so use Xverse for signet etches that need a taproot.
 - Provider choice persists; wallet identity is dropped after 7 days; reconnect prompt appears after a refresh.
 
 ---
@@ -88,7 +88,7 @@ In the inscription modes you can paste a **sat number or inscription ID** as the
 **A compatible wallet exposing two addresses:**
 - A **taproot (ordinals)** address — every rune and inscription lands here. *(Xverse provides this on both networks; Leather does **not** provide one on testnet.)*
 - A spendable **payment (segwit)** address to fund the etch.
-- → **Use Xverse** for the full feature set, especially on testnet4.
+- → **Use Xverse** for the full feature set, especially on signet.
 
 **Funds.** Enough spendable BTC in the payment address to cover, in one etch: the **commit output** (which pre-funds the reveal) + the **commit fee** + the **reveal fee** + **dust** outputs. The UI shows the exact estimate — keep a little headroom.
 
@@ -100,7 +100,7 @@ In the inscription modes you can paste a **sat number or inscription ID** as the
 
 **Network setup:**
 - **Mainnet** — nothing extra. Uses public `ordinals.com` + `mempool.space` (with the emzy fallback) out of the box.
-- **Testnet4 (for full functionality)** — run your **own ord** with all index flags (`--index-runes --index-sats --index-addresses` plus inscription/transaction indexes) and point the app at it with `NEXT_PUBLIC_ORD_BASE_TESTNET` (e.g. `http://127.0.0.1:8080`). Without a local testnet4 ord, **name-availability checks, rare-sat badges, and parent current-location resolution degrade or are skipped** (you lose those safety nets, though the etch can still proceed).
+- **Signet (for full functionality)** — run your **own ord** with all index flags (`--index-runes --index-sats --index-addresses` plus inscription/transaction indexes) and point the app at it with `NEXT_PUBLIC_ORD_BASE_SIGNET` (e.g. `http://127.0.0.1:8080`). Without a local signet ord, **name-availability checks, rare-sat badges, and parent current-location resolution degrade or are skipped** (you lose those safety nets, though the etch can still proceed). Fund via [signetfaucet.com](https://signetfaucet.com) (Xverse → Signet network).
 
 **Browser.** A current desktop browser with the wallet extension installed.
 
@@ -122,6 +122,8 @@ For dev mode, create `.env.local` (the CSP override is needed for WASM + React d
 ```
 NEXT_PUBLIC_CSP_DEV=1
 # Optional ord overrides (per network); legacy NEXT_PUBLIC_ORD_BASE also accepted:
+# NEXT_PUBLIC_ORD_BASE_SIGNET=http://127.0.0.1:8080
+# Legacy testnet4 env still works as a fallback for signet:
 # NEXT_PUBLIC_ORD_BASE_TESTNET=http://127.0.0.1:8080
 # NEXT_PUBLIC_ORD_BASE_MAINNET=https://ordinals.com
 ```
@@ -131,7 +133,7 @@ Configured ord origins are automatically added to the CSP `connect-src`.
 Run the test suite:
 
 ```bash
-npm test         # 160 tests
+npm test         # 177 tests
 ```
 
 ---
