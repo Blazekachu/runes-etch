@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useBuilderStore } from '@/store/builderStore';
 import { fetchFeeRates, setMempoolNetwork } from '@/lib/api/mempool';
 import { walletChain } from '@/lib/network';
-import { resolveFeeFromMode, type FeeMode } from '@/lib/fees/resolveFeeFromMode';
+import { resolveFeeFromMode, formatFeeRate, type FeeMode } from '@/lib/fees/resolveFeeFromMode';
 import SectionWrapper from './SectionWrapper';
 
 export default function FeeRateSection() {
@@ -76,15 +76,17 @@ export default function FeeRateSection() {
 
   const effectiveReveal = selectedRevealFeeRate ?? selectedFeeRate;
   const badge = selectedRevealFeeRate && selectedRevealFeeRate !== selectedFeeRate
-    ? `commit ${selectedFeeRate} · reveal ≤${selectedRevealFeeRate} sat/vB`
-    : `${selectedFeeRate} sat/vB`;
+    ? `commit ${formatFeeRate(selectedFeeRate)} · reveal ≤${formatFeeRate(selectedRevealFeeRate)} sat/vB`
+    : `${formatFeeRate(selectedFeeRate)} sat/vB`;
 
   return (
     <SectionWrapper sectionKey="fee-rate" title="Fee Rates" badge={badge}>
       <div className="flex flex-col gap-6">
         <div className="flex items-center justify-between">
           <p className="text-xs text-gray-500">
-            Commit and reveal can use different rates. Reveal budget pre-funds commit.vout[0] for the max reveal rate.
+            Commit and reveal can use different rates (including decimals like 0.69).
+            Fee is whole sats — we pick the closest sat amount to your sat/vB target.
+            Reveal budget pre-funds commit.vout[0] for the max reveal rate.
           </p>
           <button
             onClick={loadFees}
@@ -142,7 +144,7 @@ export default function FeeRateSection() {
             <span className="text-sm font-medium text-gray-300">
               Commit fee rate
             </span>
-            <span className="font-mono text-xs text-orange-400">{selectedFeeRate} sat/vB</span>
+            <span className="font-mono text-xs text-orange-400">{formatFeeRate(selectedFeeRate)} sat/vB</span>
           </div>
           <div className="flex gap-2">
             <button className={btnClass(commitMode, 'economy')} onClick={() => setCommitMode('economy')}>
@@ -161,11 +163,12 @@ export default function FeeRateSection() {
           <div className="flex items-center gap-3 mt-1">
             <input
               type="number"
-              min={1}
+              min={0.01}
+              step={0.01}
               value={commitCustom}
               onChange={(e) => { setCommitCustom(e.target.value); setCommitMode('custom'); }}
               onFocus={() => setCommitMode('custom')}
-              placeholder="Custom sat/vB"
+              placeholder="e.g. 0.69"
               className={`flex-1 rounded-lg border px-4 py-2 font-mono text-sm text-white placeholder-gray-600 bg-gray-900 focus:outline-none transition-colors ${
                 commitMode === 'custom' ? 'border-orange-500' : 'border-gray-700'
               }`}
@@ -179,10 +182,10 @@ export default function FeeRateSection() {
           <div className="flex flex-col gap-2 border-t border-gray-800 pt-4">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-gray-300">Reveal fee budget (max)</span>
-              <span className="font-mono text-xs text-orange-400">≤{effectiveReveal} sat/vB</span>
+              <span className="font-mono text-xs text-orange-400">≤{formatFeeRate(effectiveReveal)} sat/vB</span>
             </div>
             <p className="text-xs text-gray-500">
-              Pre-funds commit.vout[0] for up to this reveal rate. At reveal sign time, pick any rate from 1 up to this budget; the difference returns to your payment address (segwit) as change.
+              Pre-funds commit.vout[0] for up to this reveal rate. At reveal sign time, pick any rate from 0.01 up to this budget; the difference returns to your payment address (segwit) as change.
             </p>
             <div className="flex gap-2">
               <button className={btnClass(revealMode, 'match')} onClick={() => setRevealMode('match')}>
@@ -200,11 +203,12 @@ export default function FeeRateSection() {
             <div className="flex items-center gap-3 mt-1">
               <input
                 type="number"
-                min={1}
+                min={0.01}
+                step={0.01}
                 value={revealCustom}
                 onChange={(e) => { setRevealCustom(e.target.value); setRevealMode('custom'); }}
                 onFocus={() => setRevealMode('custom')}
-                placeholder="Custom sat/vB"
+                placeholder="e.g. 1.21"
                 className={`flex-1 rounded-lg border px-4 py-2 font-mono text-sm text-white placeholder-gray-600 bg-gray-900 focus:outline-none transition-colors ${
                   revealMode === 'custom' ? 'border-orange-500' : 'border-gray-700'
                 }`}

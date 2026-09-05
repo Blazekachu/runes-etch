@@ -56,8 +56,22 @@ export default function UtxoSection() {
   // When null, the builder falls back to the commit rate.
   const effectiveRevealRate = selectedRevealFeeRate ?? selectedFeeRate;
   const selectedList = utxos.filter((u) => u.selected);
-  const selectedTaprootInputs = selectedList.filter((u) => u.source === 'taproot').length;
-  const selectedSegwitInputs = selectedList.filter((u) => u.source === 'payment').length;
+  const selectedTaprootInputs = selectedList.filter((u) =>
+    u.address.startsWith('bc1p') || u.address.startsWith('tb1p') || u.address.startsWith('bcrt1p'),
+  ).length;
+  const selectedNestedInputs = selectedList.filter((u) =>
+    u.address.startsWith('3') || u.address.startsWith('2'),
+  ).length;
+  const selectedNativeSegwitInputs = selectedList.length - selectedTaprootInputs - selectedNestedInputs;
+  // Preview assumes payment change matches wallet payment address when known.
+  const previewChangeType =
+    wallet.paymentAddress?.startsWith('3') || wallet.paymentAddress?.startsWith('2')
+      ? 'p2sh-p2wpkh' as const
+      : wallet.paymentAddress?.startsWith('bc1p') ||
+          wallet.paymentAddress?.startsWith('tb1p') ||
+          wallet.paymentAddress?.startsWith('bcrt1p')
+        ? 'p2tr' as const
+        : 'p2wpkh' as const;
   const costEstimate = estimateCommitFunding({
     contentSize,
     hasParent,
@@ -65,8 +79,10 @@ export default function UtxoSection() {
     commitFeeRate: selectedFeeRate,
     revealFeeRate: effectiveRevealRate,
     numTaprootInputs: selectedList.length > 0 ? selectedTaprootInputs : 0,
-    numSegwitInputs: selectedList.length > 0 ? selectedSegwitInputs : 1,
+    numSegwitInputs: selectedList.length > 0 ? selectedNativeSegwitInputs : 1,
+    numNestedSegwitInputs: selectedList.length > 0 ? selectedNestedInputs : 0,
     numCommitOutputs: 2,
+    changeOutputType: previewChangeType,
   });
   const estCost = costEstimate.total;
   const totalSats = selectedList.reduce((acc, u) => acc + u.value, 0);
@@ -134,14 +150,16 @@ export default function UtxoSection() {
     const friendly = (err: unknown): string => {
       const raw = err instanceof Error ? err.message : String(err);
       return /aborted|timed out/i.test(raw)
-        ? 'mempool.space timed out (transient under load — Refresh).'
+        ? 'All mempool providers timed out (mempool.space + emzy). Hit Refresh.'
         : raw || 'Unknown error';
     };
 
     // Phase 1: PAYMENT first. Fast, what the user needs to pay fees.
-    // Render immediately so the user isn't blocked by the slow taproot walk.
+    // Always fetch paymentAddress when present — even if it equals taproot
+    // (some wallets use one address for both). Taproot enumeration is disabled;
+    // skipping here used to leave the UTXO list empty with no error.
     let paymentLabeled: LabeledUtxo[] = [];
-    if (wallet.paymentAddress && wallet.paymentAddress !== wallet.taprootAddress) {
+    if (wallet.paymentAddress) {
       try {
         const paymentRaw = await fetchUtxos(wallet.paymentAddress);
         paymentLabeled = paymentRaw.map((u) => ({

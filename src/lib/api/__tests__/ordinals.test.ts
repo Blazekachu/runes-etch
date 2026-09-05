@@ -189,6 +189,40 @@ describe('getRuneNameStatus (Finding #10 — lag-aware rune lookup)', () => {
     }
   });
 
+  it('treats JSON-406 then HTML-404 as available (ordinals.com json api disabled)', async () => {
+    let runeCalls = 0;
+    global.fetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const u = url.toString();
+      const accept = (init?.headers as Record<string, string> | undefined)?.Accept
+        ?? (init?.headers as Headers | undefined)?.get?.('Accept')
+        ?? '';
+      if (u.includes('/rune/')) {
+        runeCalls += 1;
+        if (String(accept).includes('application/json')) {
+          return new Response('', { status: 406 });
+        }
+        return new Response('<html>not found</html>', { status: 404 });
+      }
+      if (u.endsWith('/status')) {
+        if (String(accept).includes('application/json')) {
+          return new Response('', { status: 406 });
+        }
+        return new Response(
+          '<dl><dt>height</dt><dd>850000</dd><dt>unrecoverably reorged</dt><dd>false</dd><dt>chain</dt><dd>mainnet</dd></dl>',
+          { status: 200, headers: { 'content-type': 'text/html' } },
+        );
+      }
+      if (u.includes('/blocks/tip/height')) {
+        return new Response('850000', { status: 200 });
+      }
+      throw new Error(`Unmocked fetch: ${u}`);
+    }) as unknown as typeof fetch;
+
+    const s = await getRuneNameStatus('VOTER');
+    expect(s.state).toBe('available');
+    expect(runeCalls).toBeGreaterThanOrEqual(2);
+  });
+
   it('throws on invalid rune name format', async () => {
     await expect(getRuneNameStatus('lowercase')).rejects.toThrow(/Invalid rune name/);
   });

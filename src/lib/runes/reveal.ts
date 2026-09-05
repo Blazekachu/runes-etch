@@ -5,6 +5,8 @@ import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { buildRunestoneScript } from './runestone';
 import { buildFundingPsbtInput, type PsbtKeyMaterial } from './psbtInputs';
+import { feeFromVSizeBigInt } from '@/lib/fees/feeFromVSize';
+import { estimateRevealVBytes, scriptTypeForAddress } from './etchTxSize';
 import type { RuneEtching, CommitTxState, ParentInscription, Utxo } from '@/types';
 
 bitcoin.initEccLib(ecc);
@@ -157,17 +159,10 @@ export function buildRevealTx(params: RevealTxParams): RevealTxResult {
     value: BigInt(0),
   });
 
-  // --- Fee estimation ---
-  const estimatedVBytes = estimateRevealVBytes(
-    tapscript.length,
-    true, // rune receiver output always present
-    !!parentInscription,
-    additionalFundingUtxos.length,
-    runestoneScript.length,
-  );
-  const fee = BigInt(Math.ceil(estimatedVBytes * feeRate));
+  // --- Fee estimation (typed change by address; re-estimate if change would be dust) ---
+  const changeOutputType = scriptTypeForAddress(changeAddress);
+  const fundingInputTypes = additionalFundingUtxos.map((u) => scriptTypeForAddress(u.address));
 
-  // --- Change output ---
   const totalIn =
     BigInt(commitState.commitOutputValue) +
     (parentInscription ? BigInt(parentInscription.value) : 0n) +
@@ -178,17 +173,48 @@ export function buildRevealTx(params: RevealTxParams): RevealTxResult {
     (parentInscription ? BigInt(parentInscription.value) : 0n) +
     0n; // OP_RETURN has value 0
 
-  const changeValue = totalIn - totalOut - fee;
+  let estimatedVBytes = estimateRevealVBytes({
+    tapscriptLen: tapscript.length,
+    hasParent: !!parentInscription,
+    numFundingUtxos: additionalFundingUtxos.length,
+    fundingInputTypes,
+    hasRuneOutput: true,
+    changeOutput: changeOutputType,
+    opReturnScriptLen: runestoneScript.length,
+  });
+  let fee = feeFromVSizeBigInt(estimatedVBytes, feeRate);
+  let changeValue = totalIn - totalOut - fee;
+
   if (changeValue < 0n) {
     throw new Error(
       `Insufficient funds for reveal TX. Need ${totalOut + fee} sats, have ${totalIn} sats.`,
     );
   }
+
   if (changeValue >= DUST_LIMIT) {
     psbt.addOutput({
       address: changeAddress,
       value: changeValue,
     });
+  } else {
+    // Omit dust change; re-size fee for the 1-fewer-output tx.
+    estimatedVBytes = estimateRevealVBytes({
+      tapscriptLen: tapscript.length,
+      hasParent: !!parentInscription,
+      numFundingUtxos: additionalFundingUtxos.length,
+      fundingInputTypes,
+      hasRuneOutput: true,
+      changeOutput: null,
+      opReturnScriptLen: runestoneScript.length,
+    });
+    fee = feeFromVSizeBigInt(estimatedVBytes, feeRate);
+    changeValue = totalIn - totalOut - fee;
+    if (changeValue < 0n) {
+      throw new Error(
+        `Insufficient funds for reveal TX. Need ${totalOut + fee} sats, have ${totalIn} sats.`,
+      );
+    }
+    // Any leftover below dust is absorbed into the miner fee (no safe fold target).
   }
 
   // --- Estimated TXID (from unsigned non-witness serialization) ---
@@ -237,80 +263,4 @@ export function computeTxid(nonWitnessBytes: Uint8Array): string {
   // Reverse for display (little-endian → big-endian)
   const reversed = Buffer.from(hash2).reverse();
   return reversed.toString('hex');
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Estimates the virtual size (vbytes) of the reveal transaction.
- *
- * Segwit weight formula:  vbytes = ceil(weight / 4)
- *
- * Non-witness (base) bytes:
- *   - 4  version
- *   - 1  input count varint
- *   - 41 per input (outpoint 36 + sequence 4 + scriptSig len 1 = 41)
- *   - 1  output count varint
- *   - 43 per P2TR output (value 8 + scriptPubKey push 1 + OP_1 1 + push32 1 + 32 = 43)
- *   - OP_RETURN output: 8 (value) + variable script push
- *   - 4  locktime
- *
- * Witness bytes (weight 1 each):
- *   - 2  segwit marker+flag
- *   - commit input witness: script + control block + empty sig item
- *   - parent / funding inputs: 1 stack item (key-path sig, 65 bytes)
- *
- * This is an approximation consistent with commit.ts's estimateRevealVBytes.
- */
-function estimateRevealVBytes(
-  tapscriptLen: number,
-  hasRuneOutput: boolean,
-  hasParent: boolean,
-  numFundingUtxos: number,
-  opReturnScriptLen: number = 50,
-): number {
-  const numInputs = 1 + (hasParent ? 1 : 0) + numFundingUtxos;
-  // Outputs = rune receiver (optional) + parent return (optional) + OP_RETURN + change
-  const numOutputs = (hasRuneOutput ? 1 : 0) + (hasParent ? 1 : 0) + 1 + 1;
-
-  // M2: Use actual OP_RETURN script size instead of hardcoded 50
-  const opReturnOutputBytes = 8 + 1 + opReturnScriptLen; // value + scriptLen varint + script
-
-  // Base (non-witness) weight
-  const baseBytes =
-    4 + // version
-    1 + // input count
-    numInputs * 41 + // inputs (no scriptSig for segwit)
-    1 + // output count
-    (numOutputs - 1) * 43 + // P2TR-sized outputs (excluding OP_RETURN)
-    opReturnOutputBytes + // OP_RETURN output (actual size)
-    4; // locktime
-
-  // Witness weight (counted at 1 weight unit per byte)
-  const witnessMarkerFlag = 2;
-
-  // Commit input witness: [<sig placeholder 65>, <tapscript>, <controlBlock>]
-  // Script path witnesses don't include a sig in the stack items pushed before
-  // script — only the tapscript and control block are mandatory; the script
-  // itself may push a dummy sig. We allocate 65 bytes for that.
-  const commitWitnessBytes =
-    1 + // stack item count
-    1 + 65 + // dummy sig (length prefix + sig)
-    3 + tapscriptLen + // tapscript (varint len up to 3 bytes + script)
-    1 + 33; // control block (length prefix + 33-byte minimum control block)
-
-  // Key-path inputs (parent + funding): one 65-byte schnorr sig each
-  const keyPathWitnessPerInput = 1 + 1 + 65; // stack count + len + sig
-
-  const witnessBytes =
-    witnessMarkerFlag +
-    commitWitnessBytes +
-    (hasParent ? 1 : 0) * keyPathWitnessPerInput +
-    numFundingUtxos * keyPathWitnessPerInput;
-
-  // weight = base*4 + witness*1; vbytes = ceil(weight/4)
-  const weight = baseBytes * 4 + witnessBytes;
-  return Math.ceil(weight / 4);
 }

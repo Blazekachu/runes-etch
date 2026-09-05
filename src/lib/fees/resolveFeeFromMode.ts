@@ -8,8 +8,26 @@ export type FeeResolution =
   | { kind: 'match' }
   | { kind: 'noop' };
 
-export const MIN_FEE_RATE = 1;
+/** Minimum custom sat/vB (2 decimal places). Sub-1 rates are valid when the mempool allows. */
+export const MIN_FEE_RATE = 0.01;
 export const MAX_FEE_RATE = 2000;
+
+/** Parse/normalize a user fee-rate string to at most 2 decimal places. */
+export function parseFeeRateInput(customInput: string): number | null {
+  const trimmed = customInput.trim();
+  if (!trimmed) return null;
+  const v = Number(trimmed);
+  if (!Number.isFinite(v) || v < MIN_FEE_RATE) return null;
+  const rounded = Math.round(v * 100) / 100;
+  if (rounded < MIN_FEE_RATE) return null;
+  return Math.min(rounded, MAX_FEE_RATE);
+}
+
+export function formatFeeRate(rate: number): string {
+  if (!Number.isFinite(rate)) return '—';
+  const rounded = Math.round(rate * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2);
+}
 
 /**
  * Pure resolver for fee picker UI state → store action.
@@ -28,9 +46,9 @@ export function resolveFeeFromMode(
   if (mode === 'match') return { kind: 'match' };
 
   if (mode === 'custom') {
-    const v = parseInt(customInput, 10);
-    if (isNaN(v) || v < MIN_FEE_RATE) return { kind: 'noop' };
-    return { kind: 'set', value: Math.min(v, MAX_FEE_RATE) };
+    const v = parseFeeRateInput(customInput);
+    if (v === null) return { kind: 'noop' };
+    return { kind: 'set', value: v };
   }
 
   if (!feeRates) return { kind: 'noop' };

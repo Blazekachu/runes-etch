@@ -9,12 +9,12 @@ import {
 const RUNES_ACTIVATION = 840_000;
 const SUBSIDY_HALVING_INTERVAL = 210_000;
 
-/** Protocol ground truth: earliest block where name is etchable. */
+/** Protocol ground truth: earliest block where name is etchable (ord unlock_height). */
 function bruteForceUnlockBlock(name: string, startBlock = RUNES_ACTIVATION): number {
   const value = runeNameToU128(name);
   const maxBlock = RUNES_ACTIVATION + SUBSIDY_HALVING_INTERVAL;
   for (let block = startBlock; block <= maxBlock; block++) {
-    if (minimumAtHeight(block - 1) <= value) return block;
+    if (minimumAtHeight(block) <= value) return block;
   }
   return -1;
 }
@@ -78,9 +78,9 @@ describe('100-name unlock block cross-verification', () => {
     for (const name of TEST_NAMES) {
       const value = runeNameToU128(name);
       const unlock = computeUnlockHeight(name);
-      expect(minimumAtHeight(unlock - 1)).toBeLessThanOrEqual(value);
+      expect(minimumAtHeight(unlock)).toBeLessThanOrEqual(value);
       if (unlock > RUNES_ACTIVATION) {
-        expect(minimumAtHeight(unlock - 2)).toBeGreaterThan(value);
+        expect(minimumAtHeight(unlock - 1)).toBeGreaterThan(value);
       }
     }
   });
@@ -99,24 +99,25 @@ describe('100-name unlock block — real commit bundle names', () => {
     }
   });
 
-  /** Legacy bundles exported before Finding #15 may be 1 block early (cenotaph risk). */
-  it('flags legacy bundle targetUnlockHeight values that are one block too early', () => {
+  /** Legacy bundles stored unlock heights that matched ord; we were previously 1 late. */
+  it('legacy bundle targetUnlockHeight values match corrected unlock heights', () => {
     const legacyStored: Array<[string, number]> = [
       ['PIZZA', 969_670],
       ['DAIUV', 977_972],
     ];
     for (const [name, stored] of legacyStored) {
-      expect(stored, name).toBe(computeUnlockHeight(name) - 1);
+      expect(stored, name).toBe(computeUnlockHeight(name));
     }
   });
 });
 
 describe('100-name unlock block — known regression constants', () => {
   it('matches documented exact unlock blocks from names.test.ts', () => {
-    expect(computeUnlockHeight('PUPPET')).toBe(951_871);
-    expect(computeUnlockHeight('AAAAAA')).toBe(962_500);
-    expect(computeUnlockHeight('A')).toBe(1_050_000);
-    expect(computeUnlockHeight('BHANG')).toBe(979_146);
+    expect(computeUnlockHeight('PUPPET')).toBe(951_870);
+    expect(computeUnlockHeight('AAAAAA')).toBe(962_499);
+    expect(computeUnlockHeight('A')).toBe(1_049_999);
+    expect(computeUnlockHeight('BHANG')).toBe(979_145);
     expect(computeUnlockHeight('AAAAAAAAAAAAA')).toBe(840_000);
+    expect(computeUnlockHeight('VLOVE')).toBe(965_565);
   });
 });

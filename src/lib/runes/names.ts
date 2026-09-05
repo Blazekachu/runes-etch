@@ -97,7 +97,8 @@ export function spacerBitmask(name: string, positions: number[]): number {
  * earlier than others (alphabetically later names first).
  */
 export function minimumAtHeight(blockHeight: number): bigint {
-  // M8: +1 because the TX will be mined in the NEXT block (height+1), not the current tip
+  // Matches ord's `Rune::minimum_at_height`: offset = height + 1.
+  // A name is etchable in block `height` iff name >= minimumAtHeight(height).
   const offset = blockHeight + 1;
   const start = RUNES_ACTIVATION;
   const end = start + SUBSIDY_HALVING_INTERVAL;
@@ -203,53 +204,45 @@ function unlockHeightWithActivation(
 }
 
 /**
- * Exact: how many more blocks must elapse before a name with `targetValue`
- * becomes etchable without commit-reveal at the given chain. The returned
- * value `k` is the smallest integer such that
- * `minimumAtHeightWithActivation(currentBlockHeight + k - 1, activationHeight) <= targetValue`.
+ * Exact: how many more blocks until `targetValue` is etchable at this tip.
  *
- * Algorithm: binary search over `minimumAtHeightWithActivation`. This is the
- * same primitive ord uses to gate etching, so the result is bit-exact against
- * the protocol's actual rule. Search bound is `SUBSIDY_HALVING_INTERVAL`
- * (210,000 blocks); any name unlocks within one halving of activation.
+ * Protocol rule (ord `Rune::unlock_height` tests): a name is etchable in block
+ * `X` iff `minimumAtHeight(X) <= targetValue`. The unlock height is the earliest
+ * such `X`. From tip `T`, this returns `max(0, unlockHeight - T)`.
  *
- * Defaults to mainnet activation. For testnet4 or other chains, pass the
- * appropriate `activationHeight` — without it the answer is mainnet-only.
+ * Returns 0 if the name is already etchable at tip (`minimumAtHeight(T) <= V`),
+ * which means the next mined block is also fine. Returns -1 if the search
+ * exhausts (shouldn't happen for valid inputs).
  *
- * Returns 0 if the name is already etchable at `currentBlockHeight`.
- * Returns -1 if the search exhausts (shouldn't happen for valid inputs).
- *
- * Verified bit-exact against `minimumAtHeight` brute force across 50 randomized
- * (name, anchor) pairs plus targeted same-phase and cross-phase scenarios —
- * see `blocksUntilNameUnlocks — exact-match verification` in names.test.ts.
+ * Verified against ord's unlock_height indexing and the live VLOVE etch
+ * (unlock 965565, not 965566).
  */
 export function blocksUntilNameUnlocks(
   targetValue: bigint,
   currentBlockHeight: number,
   activationHeight: number = RUNES_ACTIVATION,
 ): number {
-  // Already etchable now? minimumAtHeight(currentBlockHeight - 1) is the
-  // minimum that applies to TXs mined at `currentBlockHeight` — i.e. "if I
-  // broadcast now and get into the next block."
-  if (minimumAtHeightWithActivation(currentBlockHeight - 1, activationHeight) <= targetValue) {
+  // Already at or past unlock height for this tip?
+  if (minimumAtHeightWithActivation(currentBlockHeight, activationHeight) <= targetValue) {
     return 0;
   }
 
-  // Binary search: find smallest k in [1, SUBSIDY_HALVING_INTERVAL+1] such
-  // that the name is etchable at block (currentBlockHeight + k).
-  // minimumAtHeightWithActivation is monotonically non-increasing in offset,
-  // so binary search is valid.
-  let lo = 1;
-  let hi = SUBSIDY_HALVING_INTERVAL + 1;
+  // Binary search: earliest X > currentBlockHeight with min(X) <= target.
+  let lo = currentBlockHeight + 1;
+  let hi = activationHeight + SUBSIDY_HALVING_INTERVAL;
+  if (minimumAtHeightWithActivation(hi, activationHeight) > targetValue) {
+    return -1;
+  }
+
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
-    if (minimumAtHeightWithActivation(currentBlockHeight + mid - 1, activationHeight) <= targetValue) {
+    if (minimumAtHeightWithActivation(mid, activationHeight) <= targetValue) {
       hi = mid;
     } else {
       lo = mid + 1;
     }
   }
-  return lo <= SUBSIDY_HALVING_INTERVAL ? lo : -1;
+  return lo - currentBlockHeight;
 }
 
 /**
@@ -269,8 +262,9 @@ export function computeUnlockHeight(name: string): number {
  * Three precedence levels for the minimum:
  *  1. `runeMinimum` (authoritative — typically from ord `/status.minimum_rune_for_next_block`).
  *     Chain-agnostic. Use this for testnet4 where the local computation is wrong.
- *  2. Mainnet local computation via `minimumAtHeight(currentBlockHeight)` — only
- *     correct for mainnet (`RUNES_ACTIVATION = 840000` is hard-coded).
+ *  2. Mainnet local computation via `minimumAtHeight(currentBlockHeight + 1)` —
+ *     the minimum for the *next* mined block when `currentBlockHeight` is tip.
+ *     Only correct for mainnet (`RUNES_ACTIVATION = 840000` is hard-coded).
  *  3. Permissive testnet fallback — when caller has no authoritative minimum
  *     AND can't trust the mainnet computation, accept the name. Caller is on
  *     the hook for the catastrophe (Finding #11: BUDDY-style silent cenotaphs).
@@ -333,7 +327,8 @@ export function validateRuneName(
   }
 
   const nameValue = runeNameToU128(name);
-  const minValue = minimumAtHeight(currentBlockHeight);
+  // Tip is already mined; etching lands in the next block.
+  const minValue = minimumAtHeight(currentBlockHeight + 1);
 
   if (nameValue < minValue) {
     const unlockHeight = computeUnlockHeight(name);

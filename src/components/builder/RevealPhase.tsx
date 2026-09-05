@@ -88,15 +88,17 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
     }
   }
 
-  const MIN_FEE_RATE = 2;
+  const MIN_FEE_RATE = 0.01;
   const MAX_FEE_RATE = 2000;
   const HIGH_FEE_WARNING = 500;
 
   function handleCustomRate(val: string) {
     setCustomRate(val);
     setFeeMode('custom');
-    const v = parseInt(val, 10);
-    if (!isNaN(v) && v >= MIN_FEE_RATE) setSelectedFeeRate(Math.min(v, MAX_FEE_RATE));
+    const v = Number(val.trim());
+    if (Number.isFinite(v) && v >= MIN_FEE_RATE) {
+      setSelectedFeeRate(Math.min(Math.round(v * 100) / 100, MAX_FEE_RATE));
+    }
   }
 
   async function handleReconnect() {
@@ -430,11 +432,12 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
         <div className="flex items-center gap-3">
           <input
             type="number"
-            min={1}
+            min={0.01}
+            step={0.01}
             value={customRate}
             onChange={(e) => handleCustomRate(e.target.value)}
             onFocus={() => setFeeMode('custom')}
-            placeholder="Custom sat/vB"
+            placeholder="e.g. 0.69"
             className={`flex-1 rounded-lg border px-4 py-2.5 font-mono text-sm text-white placeholder-gray-600 bg-gray-900 focus:outline-none transition-colors ${
               feeMode === 'custom' ? 'border-orange-500' : 'border-gray-700'
             }`}

@@ -83,6 +83,99 @@ function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
   return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
+/**
+ * Fetch from ord with JSON preference, HTML fallback.
+ *
+ * Public ordinals.com currently ships with `json api: false`, so
+ * Accept application/json returns HTTP 406 for every endpoint. Local ord
+ * instances with JSON enabled still prefer JSON. On 406 we retry without
+ * forcing JSON and parse HTML dt/dd pages.
+ */
+async function ordFetch(url: string): Promise<Response> {
+  const jsonRes = await fetchWithTimeout(url, {
+    headers: { Accept: 'application/json' },
+  });
+  if (jsonRes.status !== 406) return jsonRes;
+  return fetchWithTimeout(url, {
+    headers: { Accept: '*/*' },
+  });
+}
+
+function isJsonResponse(res: Response): boolean {
+  const ct = res.headers.get('content-type') ?? '';
+  return ct.includes('application/json') || ct.includes('+json');
+}
+
+/** Parse ord HTML pages that expose fields as `<dt>key</dt><dd>value</dd>`. */
+function parseOrdHtmlDl(html: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const re = /<dt>([^<]+)<\/dt>\s*<dd[^>]*>([\s\S]*?)<\/dd>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const key = m[1].trim().toLowerCase();
+    const raw = m[2];
+    // Prefer first href target for link-heavy values (address, satpoint, inscription ids).
+    const href = raw.match(/href=\/?((?:inscription|address|sat|tx|output|block)\/[^"'\s>]+)/i)
+      ?? raw.match(/href=\/?(inscription\/[0-9a-f]+i\d+)/i);
+    let value = href
+      ? href[1].replace(/^(inscription|address|sat|tx|output|block)\//i, '')
+      : raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    // location / satpoint keep full "txid:vout:offset"
+    if (key === 'location' || key === 'output' || key === 'id') {
+      const collapsed = raw.replace(/<[^>]+>/g, '').replace(/\s+/g, '').trim();
+      if (collapsed) value = collapsed;
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+async function readOrdJsonOrHtml(res: Response): Promise<
+  | { kind: 'json'; data: unknown }
+  | { kind: 'html'; fields: Record<string, string>; html: string }
+> {
+  const text = await res.text();
+  const trimmed = text.trimStart();
+  // Sniff JSON even when Content-Type is missing (common in tests / some proxies).
+  if (isJsonResponse(res) || trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      return { kind: 'json', data: JSON.parse(text) };
+    } catch {
+      /* fall through to HTML */
+    }
+  }
+  return { kind: 'html', fields: parseOrdHtmlDl(text), html: text };
+}
+
+function statusFromOrdPayload(
+  payload: { kind: 'json'; data: unknown } | { kind: 'html'; fields: Record<string, string> },
+): { height: number | null; runeMinimum: bigint | null; chain?: string; unrecoverablyReorged?: boolean } {
+  if (payload.kind === 'json') {
+    const data = payload.data as {
+      height?: number;
+      minimum_rune_for_next_block?: string;
+      chain?: string;
+      unrecoverably_reorged?: boolean;
+    };
+    const minName = data.minimum_rune_for_next_block;
+    return {
+      height: typeof data.height === 'number' && Number.isFinite(data.height) ? data.height : null,
+      runeMinimum: minName && /^[A-Z]+$/.test(minName) ? runeNameToU128(minName) : null,
+      chain: data.chain,
+      unrecoverablyReorged: data.unrecoverably_reorged === true,
+    };
+  }
+  const h = payload.fields['height'];
+  const height = h && /^\d+$/.test(h) ? parseInt(h, 10) : null;
+  const minName = (payload.fields['minimum rune for next block'] ?? '').trim().toUpperCase();
+  return {
+    height,
+    runeMinimum: /^[A-Z]+$/.test(minName) ? runeNameToU128(minName) : null,
+    chain: payload.fields['chain'],
+    unrecoverablyReorged: payload.fields['unrecoverably reorged'] === 'true',
+  };
+}
+
 const RUNE_NAME_RE = /^[A-Z]+$/;
 const INSCRIPTION_ID_RE = /^[0-9a-f]{64}i\d+$/i;
 const TXID_RE = /^[0-9a-f]{64}$/i;
@@ -135,20 +228,34 @@ export async function getRuneNameStatus(name: string): Promise<RuneNameStatus> {
   if (_activeChain !== 'mainnet' && isPublicOrdForCurrentNetwork()) return { state: 'available' };
 
   const [runeRes, ordStatusRes] = await Promise.all([
-    fetchWithTimeout(`${ordBase()}/rune/${encodeURIComponent(name)}`, {
-      headers: { Accept: 'application/json' },
-    }),
-    fetchWithTimeout(`${ordBase()}/status`, {
-      headers: { Accept: 'application/json' },
-    }).catch(() => null),
+    ordFetch(`${ordBase()}/rune/${encodeURIComponent(name)}`),
+    ordFetch(`${ordBase()}/status`).catch(() => null),
   ]);
 
   if (runeRes.ok) {
-    const rune = (await runeRes.json()) as OrdRuneResponse;
-    return { state: 'taken', rune };
+    const text = await runeRes.text();
+    const trimmed = text.trimStart();
+    if (isJsonResponse(runeRes) || trimmed.startsWith('{')) {
+      try {
+        const rune = JSON.parse(text) as OrdRuneResponse;
+        return { state: 'taken', rune };
+      } catch {
+        /* fall through to HTML */
+      }
+    }
+    // HTML (json api disabled): 200 means the rune page exists → taken.
+    const fields = parseOrdHtmlDl(text);
+    return {
+      state: 'taken',
+      rune: {
+        id: fields['id'] ?? '',
+        name: name,
+        spacedName: fields['name'] ?? name,
+        number: fields['number'] ? parseInt(fields['number'], 10) || 0 : 0,
+      },
+    };
   }
-  // ordinals.com JSON API intermittently returns 406 for unetched names when
-  // Accept: application/json is set. This is not "name taken" — treat as unverified.
+  // Still 406 after HTML retry — rare; treat as unverified.
   if (runeRes.status === 406) {
     return {
       state: 'unknown',
@@ -170,16 +277,14 @@ export async function getRuneNameStatus(name: string): Promise<RuneNameStatus> {
   if (!ordStatusRes || !ordStatusRes.ok) {
     return { state: 'available' };
   }
-  const ordStatus = (await ordStatusRes.json()) as {
-    height: number;
-    unrecoverably_reorged?: boolean;
-    chain?: string;
-  };
-  const indexerHeight = ordStatus.height;
-  const chainHeight = await getChainTipForChain(ordStatus.chain ?? ordChainName(_activeChain)).catch(() => -1);
+  const statusPayload = await readOrdJsonOrHtml(ordStatusRes);
+  const parsed = statusFromOrdPayload(statusPayload);
+  const indexerHeight = parsed.height;
+  if (indexerHeight === null) return { state: 'available' };
+  const chainHeight = await getChainTipForChain(parsed.chain ?? ordChainName(_activeChain)).catch(() => -1);
   if (chainHeight < 0) return { state: 'available' };
   const behind = Math.max(0, chainHeight - indexerHeight);
-  if (ordStatus.unrecoverably_reorged === true) {
+  if (parsed.unrecoverablyReorged === true) {
     return { state: 'unknown', reason: 'indexer-wedged', indexerHeight, chainHeight, behind };
   }
   if (behind > NAME_CHECK_LAG_THRESHOLD) {
@@ -241,19 +346,11 @@ export async function getRuneStatusFromOrdForWallet(
   const chain = walletChain(wallet);
   if (chain !== 'mainnet' && isPublicOrdForChain(chain)) return { height: null, runeMinimum: null };
   try {
-    const res = await fetchWithTimeout(`${ordBaseForChain(chain)}/status`, {
-      headers: { Accept: 'application/json' },
-    });
+    const res = await ordFetch(`${ordBaseForChain(chain)}/status`);
     if (!res.ok) return { height: null, runeMinimum: null };
-    const data = (await res.json()) as {
-      height?: number;
-      minimum_rune_for_next_block?: string;
-    };
-    const minName = data.minimum_rune_for_next_block;
-    return {
-      height: typeof data.height === 'number' && Number.isFinite(data.height) ? data.height : null,
-      runeMinimum: minName && /^[A-Z]+$/.test(minName) ? runeNameToU128(minName) : null,
-    };
+    const payload = await readOrdJsonOrHtml(res);
+    const parsed = statusFromOrdPayload(payload);
+    return { height: parsed.height, runeMinimum: parsed.runeMinimum };
   } catch {
     return { height: null, runeMinimum: null };
   }
@@ -269,19 +366,11 @@ export async function getRuneStatusFromOrdForAddress(address?: string): Promise<
       ? 'signet' : 'mainnet';
   if (chain !== 'mainnet' && isPublicOrdForChain(chain)) return { height: null, runeMinimum: null };
   try {
-    const res = await fetchWithTimeout(`${ordBaseForChain(chain)}/status`, {
-      headers: { Accept: 'application/json' },
-    });
+    const res = await ordFetch(`${ordBaseForChain(chain)}/status`);
     if (!res.ok) return { height: null, runeMinimum: null };
-    const data = (await res.json()) as {
-      height?: number;
-      minimum_rune_for_next_block?: string;
-    };
-    const minName = data.minimum_rune_for_next_block;
-    return {
-      height: typeof data.height === 'number' && Number.isFinite(data.height) ? data.height : null,
-      runeMinimum: minName && /^[A-Z]+$/.test(minName) ? runeNameToU128(minName) : null,
-    };
+    const payload = await readOrdJsonOrHtml(res);
+    const parsed = statusFromOrdPayload(payload);
+    return { height: parsed.height, runeMinimum: parsed.runeMinimum };
   } catch {
     return { height: null, runeMinimum: null };
   }
@@ -292,14 +381,10 @@ export async function getRuneMinimumFromOrdForChain(chain: BitcoinChain): Promis
   // queries for a signet wallet would return mainnet rules.
   if (chain !== 'mainnet' && isPublicOrdForChain(chain)) return null;
   try {
-    const res = await fetchWithTimeout(`${ordBaseForChain(chain)}/status`, {
-      headers: { Accept: 'application/json' },
-    });
+    const res = await ordFetch(`${ordBaseForChain(chain)}/status`);
     if (!res.ok) return null;
-    const data = (await res.json()) as { minimum_rune_for_next_block?: string };
-    const minName = data.minimum_rune_for_next_block;
-    if (!minName || !/^[A-Z]+$/.test(minName)) return null;
-    return runeNameToU128(minName);
+    const payload = await readOrdJsonOrHtml(res);
+    return statusFromOrdPayload(payload).runeMinimum;
   } catch {
     return null;
   }
@@ -314,11 +399,25 @@ export async function getInscription(
   inscriptionId: string
 ): Promise<OrdInscriptionResponse> {
   if (!INSCRIPTION_ID_RE.test(inscriptionId)) throw new Error(`Invalid inscription ID: ${inscriptionId}`);
-  const res = await fetchWithTimeout(`${ordBase()}/inscription/${encodeURIComponent(inscriptionId)}`, {
-    headers: { Accept: 'application/json' },
-  });
+  const res = await ordFetch(`${ordBase()}/inscription/${encodeURIComponent(inscriptionId)}`);
   if (!res.ok) throw new Error(`Inscription not found: ${inscriptionId}`);
-  return res.json();
+  const payload = await readOrdJsonOrHtml(res);
+  if (payload.kind === 'json') return payload.data as OrdInscriptionResponse;
+  const fields = payload.fields;
+  const satRaw = fields['sat'];
+  const sat = satRaw && /^\d+$/.test(satRaw) ? parseInt(satRaw, 10) : null;
+  const satpoint = fields['location'] || fields['satpoint'] || '';
+  if (!fields['address'] || !satpoint) {
+    throw new Error(`Inscription HTML missing address/location: ${inscriptionId}`);
+  }
+  return {
+    id: fields['id'] || inscriptionId,
+    address: fields['address'],
+    output: fields['output'] || satpoint.split(':').slice(0, 2).join(':'),
+    content_type: fields['content type'] || '',
+    satpoint,
+    sat,
+  };
 }
 
 export async function getOutput(
@@ -327,11 +426,25 @@ export async function getOutput(
 ): Promise<OrdOutputResponse> {
   if (!TXID_RE.test(txid)) throw new Error(`Invalid txid: ${txid}`);
   if (!Number.isInteger(vout) || vout < 0) throw new Error(`Invalid vout: ${vout}`);
-  const res = await fetchWithTimeout(`${ordBase()}/output/${encodeURIComponent(txid)}:${vout}`, {
-    headers: { Accept: 'application/json' },
-  });
+  const res = await ordFetch(`${ordBase()}/output/${encodeURIComponent(txid)}:${vout}`);
   if (!res.ok) throw new Error(`Output not found: ${txid}:${vout}`);
-  return res.json();
+  const payload = await readOrdJsonOrHtml(res);
+  if (payload.kind === 'json') return payload.data as OrdOutputResponse;
+  const html = payload.html;
+  const fields = payload.fields;
+  const inscriptionIds = Array.from(
+    html.matchAll(/href=\/?inscription\/([0-9a-f]+i\d+)/gi),
+    (m) => m[1].toLowerCase(),
+  );
+  const value = fields['value'] && /^\d+$/.test(fields['value']) ? parseInt(fields['value'], 10) : 0;
+  return {
+    address: fields['address'] || '',
+    inscriptions: [...new Set(inscriptionIds)],
+    runes: {},
+    value,
+    // Public HTML pages omit sat_ranges when json api is off.
+    sat_ranges: undefined,
+  };
 }
 
 /** True when session chain is signet. */
@@ -357,11 +470,29 @@ export function isOrdinalsTestnet(): boolean {
 /** Fetch a single sat's rarity / name / block from ord. */
 export async function getSat(satNumber: number): Promise<OrdSatResponse> {
   if (!Number.isInteger(satNumber) || satNumber < 0) throw new Error(`Invalid sat number: ${satNumber}`);
-  const res = await fetchWithTimeout(`${ordBase()}/sat/${satNumber}`, {
-    headers: { Accept: 'application/json' },
-  });
+  const res = await ordFetch(`${ordBase()}/sat/${satNumber}`);
   if (!res.ok) throw new Error(`Sat lookup failed: ${res.status}`);
-  return res.json();
+  const payload = await readOrdJsonOrHtml(res);
+  if (payload.kind === 'json') return payload.data as OrdSatResponse;
+  const fields = payload.fields;
+  const rarity = (fields['rarity'] || 'common') as OrdSatResponse['rarity'];
+  const block = fields['block'] && /^\d+$/.test(fields['block']) ? parseInt(fields['block'], 10) : 0;
+  const satpoint = fields['location'] || '';
+  if (!fields['address'] || !satpoint) {
+    throw new Error(`Sat HTML missing address/location: ${satNumber}`);
+  }
+  return {
+    number: satNumber,
+    rarity,
+    name: fields['name'] || '',
+    block,
+    cycle: fields['cycle'] ? parseInt(fields['cycle'], 10) || 0 : 0,
+    epoch: fields['epoch'] ? parseInt(fields['epoch'], 10) || 0 : 0,
+    period: fields['period'] ? parseInt(fields['period'], 10) || 0 : 0,
+    decimal: fields['decimal'] || '',
+    satpoint,
+    address: fields['address'],
+  };
 }
 
 const LABEL_CONCURRENCY = 5;

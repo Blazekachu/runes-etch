@@ -29,7 +29,8 @@ Every fund-critical path is guarded:
 - Double-commit prevention — can't run two commits for the same etch; mode is locked once a commit exists.
 - Insufficient funds throws **before** signing (no half-signed PSBTs).
 - Dust-change warning before broadcast; premine always gets a dust output so runes aren't burned on the runestone.
-- Resilient providers — `mempool.space` falls over to `mempool.emzy.de` for reads **and broadcast** so a provider outage can't strand a signed transaction.
+- Resilient providers — `mempool.emzy.de` is tried first, then `mempool.space`, then `blockstream.info` for reads **and broadcast** so a provider outage can't strand a signed transaction.
+- Ord HTML fallback — when public `ordinals.com` has `json api: false` (HTTP 406 on `Accept: application/json`), clients retry as HTML and parse `<dt>/<dd>` status/rune/inscription pages.
 
 ## Private-Key Guarantees
 
@@ -44,7 +45,7 @@ Private keys never leave the user's wallet extension:
 ## XSS / Injection Defenses
 
 - CSP blocks all external scripts (`script-src 'self'`)
-- `connect-src` limited to `mempool.space` (+ subdomains), `mempool.emzy.de`, `ordinals.com`, and any explicitly configured ord origin (auto-added from `NEXT_PUBLIC_ORD_BASE*`)
+- `connect-src` limited to `mempool.space` (+ subdomains), `mempool.emzy.de`, `blockstream.info`, `ordinals.com`, and any explicitly configured ord origin (auto-added from `NEXT_PUBLIC_ORD_BASE*`)
 - `frame-ancestors 'none'` blocks clickjacking
 - Broadcast error messages HTML-sanitized
 - All API inputs regex-validated before use

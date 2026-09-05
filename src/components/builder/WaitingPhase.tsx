@@ -360,7 +360,7 @@ export default function WaitingPhase() {
   // (selectedRevealFeeRate from bundle/store). Null means unknown/legacy → no cap from
   // this side; insufficient-funds will surface at build time if user picks too high.
   const revealMaxRate = selectedRevealFeeRate ?? 2000;
-  const clampReveal = (v: number): number => Math.max(1, Math.min(v, revealMaxRate));
+  const clampReveal = (v: number): number => Math.max(0.01, Math.min(v, revealMaxRate));
 
   function handleFeeMode(mode: typeof feeMode) {
     setFeeMode(mode);
@@ -376,9 +376,9 @@ export default function WaitingPhase() {
   function handleCustomFeeRate(val: string) {
     setCustomRate(val);
     setFeeMode('custom');
-    const v = parseInt(val, 10);
-    if (!isNaN(v) && v >= 1) {
-      setSelectedFeeRate(clampReveal(v));
+    const v = Number(val.trim());
+    if (Number.isFinite(v) && v >= 0.01) {
+      setSelectedFeeRate(clampReveal(Math.round(v * 100) / 100));
       resetVanityForNewFee();
     }
   }
@@ -687,11 +687,12 @@ export default function WaitingPhase() {
         <div className="flex items-center gap-3">
           <input
             type="number"
-            min={1}
+            min={0.01}
+            step={0.01}
             value={customRate}
             onChange={(e) => handleCustomFeeRate(e.target.value)}
             onFocus={() => setFeeMode('custom')}
-            placeholder="Custom sat/vB"
+            placeholder="e.g. 0.69"
             className={`flex-1 rounded-lg border px-3 py-2 font-mono text-sm text-white placeholder-gray-600 bg-gray-950 focus:outline-none transition-colors ${
               feeMode === 'custom' ? 'border-orange-500' : 'border-gray-700'
             }`}

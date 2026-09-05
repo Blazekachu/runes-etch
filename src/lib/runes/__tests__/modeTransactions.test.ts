@@ -86,14 +86,14 @@ describe('mode transaction shapes', () => {
       numCommitOutputs: 2,
     });
 
-    expect(estimate.revealVBytes).toBe(247);
-    expect(estimate.revealFee).toBe(1_235);
+    expect(estimate.revealVBytes).toBe(210);
+    expect(estimate.revealFee).toBe(1_050);
     expect(estimate.runeOutputValue).toBe(546);
     expect(estimate.revealChangeReserve).toBe(546);
-    expect(estimate.commitOutputValue).toBe(2_327);
-    expect(estimate.commitVBytes).toBe(165);
-    expect(estimate.commitFee).toBe(165);
-    expect(estimate.total).toBe(2_492);
+    expect(estimate.commitOutputValue).toBe(2_142);
+    expect(estimate.commitVBytes).toBe(153);
+    expect(estimate.commitFee).toBe(153);
+    expect(estimate.total).toBe(2_295);
   });
 
   it('parent-child commit funding excludes parent pass-through value', () => {

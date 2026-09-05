@@ -24,8 +24,15 @@ describe('resolveFeeFromMode', () => {
       expect(resolveFeeFromMode('custom', null, '5000')).toEqual({ kind: 'set', value: 2000 });
     });
 
-    it('clamps custom value below MIN_FEE_RATE (1)', () => {
+    it('parses fractional custom rates to 2 decimals', () => {
+      expect(resolveFeeFromMode('custom', null, '0.69')).toEqual({ kind: 'set', value: 0.69 });
+      expect(resolveFeeFromMode('custom', null, '1.219')).toEqual({ kind: 'set', value: 1.22 });
+      expect(resolveFeeFromMode('custom', null, '4.21')).toEqual({ kind: 'set', value: 4.21 });
+    });
+
+    it('clamps custom value below MIN_FEE_RATE (0.01)', () => {
       expect(resolveFeeFromMode('custom', null, '0')).toEqual({ kind: 'noop' });
+      expect(resolveFeeFromMode('custom', null, '0.001')).toEqual({ kind: 'noop' });
     });
 
     it('noops on empty custom input', () => {

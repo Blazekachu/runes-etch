@@ -1,20 +1,41 @@
-import { describe, it, expect, vi } from 'vitest';
-import { setMempoolNetwork, getCurrentBlockHeight, fetchUtxos } from '../mempool';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { setMempoolNetwork, getCurrentBlockHeight, fetchUtxos, _resetMempoolProvidersForTests } from '../mempool';
 
 // realistic-length signet taproot addresses (validateAddress requires 26-90 chars)
 const TADDR = 'tb1p58h0wl2d74za6lesf8u9ews0z7cq604085dgj4uprx9tktmreznqp4dvtg';
 const HOARDER = 'tb1pq6r556kx3rdg9jv4gu680averf53y6p8ue5phqqg6r556kx3rdg9jv4gu';
 
 describe('mempool provider fallback (#5)', () => {
-  it('falls back to mempool.emzy.de (signet) when mempool.space is unreachable', async () => {
-    // mempool.space is down (every request throws); emzy serves signet.
+  beforeEach(() => {
+    _resetMempoolProvidersForTests();
+  });
+
+  it('prefers emzy first when both providers are up', async () => {
+    const calls: string[] = [];
     global.fetch = vi.fn(async (url: string | URL) => {
       const u = url.toString();
-      if (u.startsWith('https://mempool.space/')) throw new Error('mempool.space timeout');
-      if (u.includes('mempool.emzy.de/signet/api/address/') && u.endsWith('/utxo')) {
-        return new Response('[]', { status: 200 });
-      }
+      calls.push(u);
       if (u === 'https://mempool.emzy.de/signet/api/blocks/tip/height') {
+        return new Response('137015', { status: 200 });
+      }
+      if (u.startsWith('https://mempool.space/')) {
+        return new Response('999999', { status: 200 });
+      }
+      throw new Error('unmocked: ' + u);
+    }) as unknown as typeof fetch;
+
+    await setMempoolNetwork('signet');
+    const h = await getCurrentBlockHeight();
+    expect(h).toBe(137015);
+    expect(calls[0]).toContain('mempool.emzy.de');
+    expect(calls.some((c) => c.includes('mempool.space'))).toBe(false);
+  });
+
+  it('falls back when emzy is unreachable (space still works)', async () => {
+    global.fetch = vi.fn(async (url: string | URL) => {
+      const u = url.toString();
+      if (u.startsWith('https://mempool.emzy.de/')) throw new Error('emzy timeout');
+      if (u === 'https://mempool.space/signet/api/blocks/tip/height') {
         return new Response('137015', { status: 200 });
       }
       throw new Error('unmocked: ' + u);
@@ -25,20 +46,41 @@ describe('mempool provider fallback (#5)', () => {
     expect(h).toBe(137015);
   });
 
+  it('keeps sticky preferred provider across setMempoolNetwork(same chain)', async () => {
+    const calls: string[] = [];
+    global.fetch = vi.fn(async (url: string | URL) => {
+      const u = url.toString();
+      calls.push(u);
+      if (u.startsWith('https://mempool.emzy.de/')) throw new Error('emzy timeout');
+      if (u === 'https://mempool.space/signet/api/blocks/tip/height') {
+        return new Response('137015', { status: 200 });
+      }
+      throw new Error('unmocked: ' + u);
+    }) as unknown as typeof fetch;
+
+    await setMempoolNetwork('signet');
+    await getCurrentBlockHeight(); // fails over to space, sticky = space
+    calls.length = 0;
+    await setMempoolNetwork('signet'); // must NOT wipe sticky preferred
+    await getCurrentBlockHeight();
+    expect(calls[0]).toContain('mempool.space');
+    expect(calls.some((c) => c.includes('emzy'))).toBe(false);
+  });
+
   it('does NOT fall back on a 4xx (preserves hoarder-address 400 -> /txs walk)', async () => {
-    // primary returns 400 on /utxo (too many utxos). Must NOT switch providers;
+    // primary (emzy) returns 400 on /utxo (too many utxos). Must NOT switch providers;
     // fetchUtxos handles 400 by walking /txs/chain on the SAME provider.
     const calls: string[] = [];
     global.fetch = vi.fn(async (url: string | URL) => {
       const u = url.toString();
       calls.push(u);
-      if (u.includes('mempool.space/signet/api/address/') && u.endsWith('/utxo')) {
+      if (u.includes('mempool.emzy.de/signet/api/address/') && u.endsWith('/utxo')) {
         return new Response('', { status: 400 });
       }
-      if (u.includes('mempool.space/signet/api/address/') && u.includes('/txs/chain')) {
+      if (u.includes('mempool.emzy.de/signet/api/address/') && u.includes('/txs/chain')) {
         return new Response('[]', { status: 200 }); // empty walk -> no utxos
       }
-      if (u.includes('mempool.space/signet/api/address/') && u.endsWith('/txs/mempool')) {
+      if (u.includes('mempool.emzy.de/signet/api/address/') && u.endsWith('/txs/mempool')) {
         return new Response('[]', { status: 200 });
       }
       throw new Error('unmocked: ' + u);
@@ -47,8 +89,8 @@ describe('mempool provider fallback (#5)', () => {
     await setMempoolNetwork('signet');
     const utxos = await fetchUtxos(HOARDER);
     expect(utxos).toEqual([]);
-    // the 400 must have triggered the /txs walk on mempool.space, NOT a hop to emzy
-    expect(calls.some((c) => c.includes('mempool.space') && c.includes('/txs/chain'))).toBe(true);
-    expect(calls.some((c) => c.includes('emzy'))).toBe(false);
+    // the 400 must have triggered the /txs walk on emzy, NOT a hop to space
+    expect(calls.some((c) => c.includes('mempool.emzy.de') && c.includes('/txs/chain'))).toBe(true);
+    expect(calls.some((c) => c.includes('mempool.space'))).toBe(false);
   });
 });

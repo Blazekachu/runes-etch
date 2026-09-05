@@ -235,8 +235,12 @@ export default function RuneDetailsSection() {
   }
 
   function handleSymbolChange(raw: string) {
-    const chars = [...raw];
-    setSymbol(chars.length > 0 ? chars[chars.length - 1] : '');
+    // Runes protocol stores a single Unicode scalar (u128 code point).
+    // Take the first code point — not the last spread char. Emoji like 🗳️ are
+    // U+1F5F3 + U+FE0F; spreading and keeping the last char left only the
+    // invisible variation selector.
+    if (!raw) { setSymbol(''); return; }
+    setSymbol(String.fromCodePoint(raw.codePointAt(0)!));
   }
 
   function handleDivisibilityChange(raw: string) {
@@ -372,8 +376,9 @@ export default function RuneDetailsSection() {
             className="w-24 rounded-lg border border-gray-700 bg-gray-900 px-4 py-2.5 font-mono text-white placeholder-gray-600 focus:border-orange-500 focus:outline-none text-center text-lg"
           />
           <p className="text-xs text-gray-500">
-            Any Unicode character — letters, emoji, symbols. Examples:{' '}
-            <span className="font-mono">$ ¤ ⧉ 🔥 ∞ ₿</span>
+            One Unicode code point (protocol limit). Emoji with modifiers
+            (e.g. 🗳️ → 🗳) keep the base glyph. Examples:{' '}
+            <span className="font-mono">$ ¤ ⧉ 🔥 ∞ ₿ 🗳</span>
           </p>
         </div>
 

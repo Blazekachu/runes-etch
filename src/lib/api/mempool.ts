@@ -28,27 +28,30 @@ const MEMPOOL_SIGNET = 'https://mempool.space/signet/api';
 const MEMPOOL_TESTNET4 = 'https://mempool.space/testnet4/api';
 const MEMPOOL_TESTNET3 = 'https://mempool.space/testnet/api';
 
-// Fallback providers (Punch List #5). mempool.space is primary; mempool.emzy.de is a
-// community mirror. When the primary is unreachable or 5xx, calls transparently fail
-// over to the next provider, and the working one is remembered for the session.
+// Fallback providers (Punch List #5). Prefer reachable mirrors first —
+// mempool.space often hangs from some networks. memepool.space is a separate
+// community Esplora host (not a typo) with CORS + /v1/fees.
 const EMZY_MAINNET = 'https://mempool.emzy.de/api';
 const EMZY_SIGNET = 'https://mempool.emzy.de/signet/api';
 const EMZY_TESTNET4 = 'https://mempool.emzy.de/testnet4/api';
 const EMZY_TESTNET3 = 'https://mempool.emzy.de/testnet/api';
+const MEMEPOOL_MAINNET = 'https://memepool.space/api';
+const BLOCKSTREAM_MAINNET = 'https://blockstream.info/api';
+const BLOCKSTREAM_SIGNET = 'https://blockstream.info/signet/api';
 
 const ESPLORA_REGTEST = (
   process.env.NEXT_PUBLIC_ESPLORA_BASE_REGTEST ?? 'http://127.0.0.1:18443/api'
 ).replace(/\/+$/, '');
 
 const PROVIDERS: Record<MempoolChainId | 'mainnet', string[]> = {
-  mainnet: [MEMPOOL_MAINNET, EMZY_MAINNET],
-  bitcoin: [MEMPOOL_MAINNET, EMZY_MAINNET],
-  signet: [MEMPOOL_SIGNET, EMZY_SIGNET],
+  mainnet: [EMZY_MAINNET, MEMEPOOL_MAINNET, MEMPOOL_MAINNET, BLOCKSTREAM_MAINNET],
+  bitcoin: [EMZY_MAINNET, MEMEPOOL_MAINNET, MEMPOOL_MAINNET, BLOCKSTREAM_MAINNET],
+  signet: [EMZY_SIGNET, MEMPOOL_SIGNET, BLOCKSTREAM_SIGNET],
   regtest: [ESPLORA_REGTEST],
   // Legacy testnet4 providers — kept so ord `/status` chain=testnet4 still resolves
   // correctly if an old indexer response is seen during migration.
-  testnet4: [MEMPOOL_TESTNET4, EMZY_TESTNET4],
-  testnet3: [MEMPOOL_TESTNET3, EMZY_TESTNET3],
+  testnet4: [EMZY_TESTNET4, MEMPOOL_TESTNET4],
+  testnet3: [EMZY_TESTNET3, MEMPOOL_TESTNET3],
 };
 
 /** @deprecated Use walletChain() — tb1 addresses cannot distinguish signet from legacy testnet4. */
@@ -66,6 +69,11 @@ let activeBases: string[] = PROVIDERS.mainnet;
 // Index (into the active list) of the last provider that worked — tried first.
 let preferredProviderIdx = 0;
 
+/** How long to wait on a non-final provider before failing over.
+ *  mempool.space often hangs under load; waiting the full 15–45s before trying
+ *  emzy makes Payment UTXO fetch look broken. Final attempt keeps the caller's timeout. */
+const FAST_FAILOVER_MS = 4_000;
+
 /** Try each base (starting from the last-good one) until one returns without a
  *  network error or 5xx. 4xx responses are returned as-is — callers like
  *  fetchUtxos depend on seeing a 400 (too-many-utxos -> /txs walk), and a 4xx is
@@ -75,9 +83,13 @@ async function tryProviders(bases: string[], path: string, init?: RequestInit, t
   let lastErr: unknown;
   for (let i = 0; i < list.length; i++) {
     const idx = (preferredProviderIdx + i) % list.length;
+    const isLast = i === list.length - 1;
+    const attemptTimeout = isLast || list.length === 1
+      ? timeoutMs
+      : Math.min(timeoutMs, FAST_FAILOVER_MS);
     try {
-      const res = await fetchWithTimeout(`${list[idx]}${path}`, init, timeoutMs);
-      if (res.status >= 500 && i < list.length - 1) { lastErr = new Error(`${list[idx]} -> ${res.status}`); continue; }
+      const res = await fetchWithTimeout(`${list[idx]}${path}`, init, attemptTimeout);
+      if (res.status >= 500 && !isLast) { lastErr = new Error(`${list[idx]} -> ${res.status}`); continue; }
       preferredProviderIdx = idx;
       return res;
     } catch (err) {
@@ -95,12 +107,27 @@ function mempoolFetch(path: string, init?: RequestInit, timeoutMs?: number): Pro
 /** Call once at wallet connect to set the API provider list for the session.
  *  Chain comes from the wallet (sats-connect network), NOT address prefix alone —
  *  signet and legacy testnet4 share tb1 addresses. Per-call provider fallback
- *  within the chosen network (mempool.space → mempool.emzy.de) still applies. */
+ *  within the chosen network (mempool.space → mempool.emzy.de) still applies.
+ *
+ *  Does NOT reset the preferred-provider sticky index when the provider list is
+ *  unchanged — UtxoSection/WalletHeader call this on every load, and wiping the
+ *  sticky index forced every Payment UTXO fetch to re-timeout on a dead primary. */
 export async function setMempoolNetwork(chain: BitcoinChain): Promise<void> {
+  const next =
+    chain === 'regtest' ? PROVIDERS.regtest
+    : chain === 'signet' ? PROVIDERS.signet
+    : PROVIDERS.mainnet;
+  const sameList =
+    activeBases.length === next.length &&
+    activeBases.every((base, i) => base === next[i]);
+  activeBases = next;
+  if (!sameList) preferredProviderIdx = 0;
+}
+
+/** Test-only: clear sticky preferred provider between vitest cases. */
+export function _resetMempoolProvidersForTests(): void {
   preferredProviderIdx = 0;
-  if (chain === 'regtest') activeBases = PROVIDERS.regtest;
-  else if (chain === 'signet') activeBases = PROVIDERS.signet;
-  else activeBases = PROVIDERS.mainnet;
+  activeBases = PROVIDERS.mainnet;
 }
 
 const FETCH_TIMEOUT_MS = 15000;

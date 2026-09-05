@@ -3,6 +3,16 @@ import * as ecc from 'tiny-secp256k1';
 import { buildTapscript, buildBareTapscript } from './inscription';
 import { runeNameToCommitmentBytes } from './names';
 import { buildFundingPsbtInput, type PsbtKeyMaterial } from './psbtInputs';
+import { feeFromVSize, feeFromVSizeBigInt } from '@/lib/fees/feeFromVSize';
+import {
+  DEFAULT_RUNESTONE_SCRIPT_LEN,
+  estimateCommitVBytes as estimateCommitVBytesTyped,
+  estimateRevealVBytes as estimateRevealVBytesShared,
+  estimateTapscriptLen,
+  outputTypeForAddress,
+  scriptTypeForAddress,
+  type ScriptOutType,
+} from './etchTxSize';
 import type { InscriptionFile, ParentInscription, Utxo } from '@/types';
 
 bitcoin.initEccLib(ecc);
@@ -54,7 +64,12 @@ export interface CommitTxResult {
   tapLeafHash: Buffer;
   controlBlock: Buffer;
   scriptTree: Taptree;
-  dustChange: number; // sats lost to miners if change < dust limit (0 if no loss)
+  /**
+   * Leftover that would have been dust change. After dust-fold this is normally 0
+   * (leftover is added to commit.vout[0] and returns on reveal). Kept for UI
+   * compatibility if a path still cannot preserve value.
+   */
+  dustChange: number;
 }
 
 export interface CommitFundingEstimate {
@@ -76,23 +91,45 @@ export interface CommitFundingEstimateParams {
   commitFeeRate: number;
   revealFeeRate: number;
   numTaprootInputs: number;
+  /** Native segwit (bc1q) funding inputs. */
   numSegwitInputs: number;
+  /** Nested segwit (3…/2…) funding inputs. */
+  numNestedSegwitInputs?: number;
   numCommitOutputs?: number;
+  /** Payment/change address type for reveal + commit change sizing (default p2wpkh). */
+  changeOutputType?: ScriptOutType;
+  /** When known, prefer actual tapscript length over content-size estimate. */
+  tapscriptLen?: number;
+  hasInscription?: boolean;
+  opReturnScriptLen?: number;
 }
 
 export function estimateCommitFunding(params: CommitFundingEstimateParams): CommitFundingEstimate {
-  const revealVBytes = estimateRevealVBytes(params.contentSize, true, params.hasParent);
-  const revealFee = Math.ceil(revealVBytes * params.revealFeeRate);
+  const changeOutputType = params.changeOutputType ?? 'p2wpkh';
+  const hasInscription = params.hasInscription ?? params.contentSize > 0;
+  const tapscriptLen =
+    params.tapscriptLen ?? estimateTapscriptLen(params.contentSize, hasInscription);
+  const revealVBytes = estimateRevealVBytesShared({
+    tapscriptLen,
+    hasParent: params.hasParent,
+    numFundingUtxos: 0,
+    hasRuneOutput: true,
+    changeOutput: changeOutputType,
+    opReturnScriptLen: params.opReturnScriptLen ?? DEFAULT_RUNESTONE_SCRIPT_LEN,
+  });
+  const revealFee = feeFromVSize(revealVBytes, params.revealFeeRate);
   const runeOutputValue = Number(DUST_LIMIT);
   const parentReturnValue = params.hasParent ? params.parentValue ?? Number(DUST_LIMIT) : 0;
   const revealChangeReserve = Number(DUST_LIMIT);
   const commitOutputValue = revealFee + runeOutputValue + revealChangeReserve;
-  const commitVBytes = estimateCommitVBytes(
-    params.numTaprootInputs,
-    params.numSegwitInputs,
-    params.numCommitOutputs ?? 2,
-  );
-  const commitFee = Math.ceil(commitVBytes * params.commitFeeRate);
+  const hasChange = (params.numCommitOutputs ?? 2) >= 2;
+  const commitVBytes = estimateCommitVBytesTyped({
+    numTaprootInputs: params.numTaprootInputs,
+    numSegwitInputs: params.numSegwitInputs,
+    numNestedSegwitInputs: params.numNestedSegwitInputs ?? 0,
+    changeOutput: hasChange ? changeOutputType : null,
+  });
+  const commitFee = feeFromVSize(commitVBytes, params.commitFeeRate);
 
   return {
     revealVBytes,
@@ -144,18 +181,24 @@ export function buildCommitTx(params: CommitTxParams): CommitTxResult {
 
   if (!commitAddress || !commitOutput) throw new Error('Failed to derive commit P2TR address');
 
-  const hasInscription = !!inscriptionFile || !!delegateId;
-  const contentSize = inscriptionFile?.body.length ?? 0;
+  const changeOutputType = outputTypeForAddress(changeAddress);
   // Always include a rune receiver output — runes need a non-OP_RETURN destination.
   // In inscription mode: this is the inscription output. In pure rune mode: dedicated dust output.
   // Reveal budget uses the (possibly higher) revealFeeRate — that's what gets
   // baked into commit.vout[0]. Reveal can pay 1..revealFeeRate at sign time;
   // any unspent budget returns to payment as change.
-  const revealVBytes = estimateRevealVBytes(contentSize, true, !!parentInscription);
-  const revealFee = BigInt(Math.ceil(revealVBytes * revealFeeRate));
+  const revealVBytes = estimateRevealVBytesShared({
+    tapscriptLen: tapscript.length,
+    hasParent: !!parentInscription,
+    numFundingUtxos: 0,
+    hasRuneOutput: true,
+    changeOutput: changeOutputType,
+    opReturnScriptLen: DEFAULT_RUNESTONE_SCRIPT_LEN,
+  });
+  const revealFee = feeFromVSizeBigInt(revealVBytes, revealFeeRate);
   const runeOutputValue = DUST_LIMIT; // rune receiver always present
   const revealChangeReserve = DUST_LIMIT;
-  const commitOutputValue = revealFee + runeOutputValue + revealChangeReserve;
+  let commitOutputValue = revealFee + runeOutputValue + revealChangeReserve;
 
   const psbt = new bitcoin.Psbt({ network });
 
@@ -173,33 +216,44 @@ export function buildCommitTx(params: CommitTxParams): CommitTxResult {
     totalInput += BigInt(utxo.value);
   }
 
-  psbt.addOutput({ address: commitAddress, value: commitOutputValue });
-  const commitOutputIndex = 0;
-
-  // M3: Count P2WPKH vs P2TR inputs for accurate size estimate
-  const numTaprootInputs = fundingUtxos.filter((u) =>
-    u.address.startsWith('bc1p') || u.address.startsWith('tb1p') || u.address.startsWith('bcrt1p'),
-  ).length;
-  const numSegwitInputs = fundingUtxos.length - numTaprootInputs;
+  // Size inputs by actual address type (p2tr / native / nested)
+  const inputTypes = fundingUtxos.map((u) => scriptTypeForAddress(u.address));
 
   // Estimate with 2 outputs first, then adjust if no change output
-  let numOutputs = 2;
-  let commitVBytes = estimateCommitVBytes(numTaprootInputs, numSegwitInputs, numOutputs);
-  let commitFee = BigInt(Math.ceil(commitVBytes * feeRate));
+  let commitVBytes = estimateCommitVBytesTyped({
+    inputTypes,
+    changeOutput: changeOutputType,
+  });
+  let commitFee = feeFromVSizeBigInt(commitVBytes, feeRate);
 
   let changeValue = totalInput - commitOutputValue - commitFee;
   if (changeValue < 0n) {
     throw new Error(`Insufficient funds. Need ${commitOutputValue + commitFee} sats, have ${totalInput} sats.`);
   }
+
   if (changeValue >= DUST_LIMIT) {
+    psbt.addOutput({ address: commitAddress, value: commitOutputValue });
     psbt.addOutput({ address: changeAddress, value: changeValue });
   } else {
-    // No change output — re-estimate with 1 output for tighter fee
-    numOutputs = 1;
-    commitVBytes = estimateCommitVBytes(numTaprootInputs, numSegwitInputs, numOutputs);
-    commitFee = BigInt(Math.ceil(commitVBytes * feeRate));
-    changeValue = totalInput - commitOutputValue - commitFee;
+    // No payment change — re-estimate with 1 output, then fold any leftover into
+    // commit.vout[0] so it returns on reveal instead of being absorbed by miners.
+    commitVBytes = estimateCommitVBytesTyped({
+      inputTypes,
+      changeOutput: null,
+    });
+    commitFee = feeFromVSizeBigInt(commitVBytes, feeRate);
+    const leftover = totalInput - commitOutputValue - commitFee;
+    if (leftover < 0n) {
+      throw new Error(`Insufficient funds. Need ${commitOutputValue + commitFee} sats, have ${totalInput} sats.`);
+    }
+    if (leftover > 0n) {
+      commitOutputValue += leftover;
+    }
+    psbt.addOutput({ address: commitAddress, value: commitOutputValue });
+    changeValue = 0n;
   }
+
+  const commitOutputIndex = 0;
 
   // TapLeaf hash: tagged hash of (leaf_version || compact_size(script) || script)
   const tapLeafHash = Buffer.from(
@@ -225,6 +279,7 @@ export function buildCommitTx(params: CommitTxParams): CommitTxResult {
     ? Buffer.from(controlBlockWitness[controlBlockWitness.length - 1])
     : Buffer.alloc(0);
 
+  // Dust fold above preserves leftover in commit out — dustChange stays 0.
   const dustChange = (changeValue > 0n && changeValue < DUST_LIMIT) ? Number(changeValue) : 0;
 
   return {
@@ -259,20 +314,4 @@ function serializeScriptWithCompactSize(script: Buffer): Buffer {
     prefix.writeUInt32LE(len, 1);
   }
   return Buffer.concat([prefix, script]);
-}
-
-function estimateCommitVBytes(numTaprootInputs: number, numSegwitInputs: number, numOutputs: number): number {
-  // M3: P2TR key-path ~57.5 vB, P2WPKH ~68 vB
-  return Math.ceil(10.5 + numTaprootInputs * 57.5 + numSegwitInputs * 68 + numOutputs * 43);
-}
-
-function estimateRevealVBytes(contentSize: number, hasInscription: boolean, hasParent: boolean): number {
-  const baseVBytes = 10.5;
-  const commitInputVBytes = 57.5 + Math.ceil(contentSize / 4);
-  const parentInputVBytes = hasParent ? 57.5 : 0;
-  // Outputs: inscription (optional) + parent return (optional) + OP_RETURN + change
-  const numOutputs = (hasInscription ? 1 : 0) + (hasParent ? 1 : 0) + 1 + 1;
-  const outputVBytes = 43 * numOutputs;
-  const opReturnVBytes = 50;
-  return Math.ceil(baseVBytes + commitInputVBytes + parentInputVBytes + outputVBytes + opReturnVBytes);
 }

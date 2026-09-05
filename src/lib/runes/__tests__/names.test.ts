@@ -234,33 +234,27 @@ describe('Rune name encoding', () => {
       expect(z6).toBeLessThan(a6);
     });
     it('matches the earliest reveal block, not the block before it', () => {
-      expect(computeUnlockHeight('PUPPET')).toBe(951871);
-      expect(computeUnlockHeight('AAAAAA')).toBe(962500);
-      expect(computeUnlockHeight('A')).toBe(1050000);
+      expect(computeUnlockHeight('PUPPET')).toBe(951870);
+      expect(computeUnlockHeight('AAAAAA')).toBe(962499);
+      expect(computeUnlockHeight('A')).toBe(1049999);
+      expect(computeUnlockHeight('VLOVE')).toBe(965565);
     });
   });
 
-  // Finding #15 EXACT-MATCH VERIFIER — brute-force check that my function's
-  // prediction matches a direct minimumAtHeight search. This is the ground
-  // truth: a name with value V is etchable at block X iff minimumAtHeight(X-1)
-  // <= V. The earliest such X is the true unlock block. My function (anchored
-  // at some block A with currentMinimum = minimumAtHeight(A-1)) must return
-  // the exact integer such that A + result == earliest_unlock_block.
+  // Exact-match verifier — ground truth matches ord unlock_height:
+  // etchable at block X iff minimumAtHeight(X) <= V.
   describe('blocksUntilNameUnlocks — exact-match verification (Finding #15)', () => {
-    // Direct ord-style search for the earliest block at which targetValue is
-    // etchable without commit-reveal. Linear over blocks but bounded — only
-    // searches within one halving (SUBSIDY_HALVING_INTERVAL = 210,000 blocks).
     function earliestUnlockBlock(targetValue: bigint, anchorBlock: number): number {
-      const MAX = 1_200_000; // ample upper bound: any name unlocks by activation + 210k
+      const MAX = 1_200_000;
       for (let b = anchorBlock; b <= MAX; b++) {
-        if (minimumAtHeight(b - 1) <= targetValue) return b;
+        if (minimumAtHeight(b) <= targetValue) return b;
       }
       return -1;
     }
 
     function verifyExact(name: string, anchorBlock: number) {
       const targetValue = runeNameToU128(name);
-      const currentMinimum = minimumAtHeight(anchorBlock - 1);
+      const currentMinimum = minimumAtHeight(anchorBlock);
 
       if (targetValue >= currentMinimum) {
         expect(blocksUntilNameUnlocks(targetValue, anchorBlock)).toBe(0);
@@ -359,7 +353,7 @@ describe('Rune name encoding', () => {
         const anchor = 840_000 + rand(200_000); // anywhere in the halving
 
         const value = runeNameToU128(name);
-        const currentMin = minimumAtHeight(anchor - 1);
+        const currentMin = minimumAtHeight(anchor);
         const predicted = blocksUntilNameUnlocks(value, anchor);
 
         if (value >= currentMin) {
@@ -395,10 +389,9 @@ describe('Rune name encoding', () => {
       expect(result).toBeLessThan(17_500);
     });
 
-    it('"A" (value 0) reaches full-unlock at activation + halving = 1,050,000', () => {
-      // Anchored just past activation; should equal 210,000 blocks to fully open.
+    it('"A" (value 0) reaches full-unlock at ord unlock_height 1,049,999', () => {
       const result = blocksUntilNameUnlocks(0n, 840_001);
-      expect(result).toBe(209_999); // 1,050,000 - 840,001
+      expect(result).toBe(209_998); // 1,049,999 - 840,001
     });
   });
 
