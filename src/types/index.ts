@@ -68,6 +68,11 @@ export interface LabeledUtxo extends Utxo {
   label: 'plain' | 'inscription' | 'rune' | 'unknown';
   selected: boolean;
   source: 'taproot' | 'payment';
+  /**
+   * Address this UTXO sits on. Set when labeling from a wallet-address fetch.
+   * Optional for older in-memory rows; fee sizing falls back via source + wallet.
+   */
+  address?: string;
   /** Inscription IDs on this UTXO (populated when label === 'inscription'). Used by reinscribe flow. */
   inscriptionIds?: string[];
 }

@@ -47,6 +47,20 @@ export function isNestedSegwitAddress(address: string): boolean {
 }
 
 /**
+ * Resolve the spend address for a funding UTXO.
+ * Mempool `/utxo` responses do not include address; LabeledUtxos are tagged by
+ * which wallet address was queried (`source`). Prefer an explicit `address`
+ * when present (e.g. after enrichment), otherwise fall back by source.
+ */
+export function fundingAddressForUtxo(
+  u: { address?: string; source: 'payment' | 'taproot' },
+  wallet: { paymentAddress: string; taprootAddress: string },
+): string {
+  if (typeof u.address === 'string' && u.address.length > 0) return u.address;
+  return u.source === 'payment' ? wallet.paymentAddress : wallet.taprootAddress;
+}
+
+/**
  * Classify a Bitcoin address for fee sizing.
  * Matches what `buildFundingPsbtInput` accepts (no legacy P2PKH).
  */

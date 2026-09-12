@@ -6,6 +6,12 @@ import { fetchUtxos, setMempoolNetwork } from '@/lib/api/mempool';
 import { fetchUtxoSatInfo, isPublicOrdForCurrentNetwork, isOrdinalsNonMainnet, setOrdinalsForWallet } from '@/lib/api/ordinals';
 import { walletChain } from '@/lib/network';
 import { estimateCommitFunding } from '@/lib/runes/commit';
+import {
+  fundingAddressForUtxo,
+  isNestedSegwitAddress,
+  isTaprootAddress,
+  outputTypeForAddress,
+} from '@/lib/runes/etchTxSize';
 import type { LabeledUtxo, SatRarity } from '@/types';
 import SectionWrapper from './SectionWrapper';
 
@@ -57,21 +63,16 @@ export default function UtxoSection() {
   const effectiveRevealRate = selectedRevealFeeRate ?? selectedFeeRate;
   const selectedList = utxos.filter((u) => u.selected);
   const selectedTaprootInputs = selectedList.filter((u) =>
-    u.address.startsWith('bc1p') || u.address.startsWith('tb1p') || u.address.startsWith('bcrt1p'),
+    isTaprootAddress(fundingAddressForUtxo(u, wallet)),
   ).length;
   const selectedNestedInputs = selectedList.filter((u) =>
-    u.address.startsWith('3') || u.address.startsWith('2'),
+    isNestedSegwitAddress(fundingAddressForUtxo(u, wallet)),
   ).length;
   const selectedNativeSegwitInputs = selectedList.length - selectedTaprootInputs - selectedNestedInputs;
   // Preview assumes payment change matches wallet payment address when known.
-  const previewChangeType =
-    wallet.paymentAddress?.startsWith('3') || wallet.paymentAddress?.startsWith('2')
-      ? 'p2sh-p2wpkh' as const
-      : wallet.paymentAddress?.startsWith('bc1p') ||
-          wallet.paymentAddress?.startsWith('tb1p') ||
-          wallet.paymentAddress?.startsWith('bcrt1p')
-        ? 'p2tr' as const
-        : 'p2wpkh' as const;
+  const previewChangeType = wallet.paymentAddress
+    ? outputTypeForAddress(wallet.paymentAddress)
+    : 'p2wpkh' as const;
   const costEstimate = estimateCommitFunding({
     contentSize,
     hasParent,
@@ -164,6 +165,7 @@ export default function UtxoSection() {
         const paymentRaw = await fetchUtxos(wallet.paymentAddress);
         paymentLabeled = paymentRaw.map((u) => ({
           ...u,
+          address: wallet.paymentAddress,
           source: 'payment' as const,
           label: 'plain' as const,
           selected: false,

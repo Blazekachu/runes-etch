@@ -7,7 +7,14 @@ import { buildBareTapscript } from '../inscription';
 import { runeNameToCommitmentBytes } from '../names';
 import { buildCommitTx, estimateCommitFunding } from '../commit';
 import { buildRevealTx } from '../reveal';
-import { estimateRevealVBytes, outputTypeForAddress, scriptTypeForAddress } from '../etchTxSize';
+import {
+  estimateRevealVBytes,
+  fundingAddressForUtxo,
+  isNestedSegwitAddress,
+  isTaprootAddress,
+  outputTypeForAddress,
+  scriptTypeForAddress,
+} from '../etchTxSize';
 import { feeFromVSize } from '@/lib/fees/feeFromVSize';
 import type { CommitTxState, RuneEtching } from '@/types';
 
@@ -61,6 +68,25 @@ describe('etchTxSize — VLOVE-shaped reveal', () => {
     expect(scriptTypeForAddress(nestedPaymentAddress)).toBe('p2sh-p2wpkh');
     expect(scriptTypeForAddress(taprootAddress)).toBe('p2tr');
     expect(outputTypeForAddress(paymentAddress)).toBe('p2wpkh');
+  });
+
+  // LabeledUtxos from mempool fetch historically omit `address`; UtxoSection must
+  // still classify by wallet payment/taproot address (BuildButton already does this).
+  it('fundingAddressForUtxo falls back to wallet address by source when UTXO.address is missing', () => {
+    const wallet = { paymentAddress: nestedPaymentAddress, taprootAddress };
+    expect(
+      fundingAddressForUtxo({ source: 'payment' }, wallet),
+    ).toBe(nestedPaymentAddress);
+    expect(
+      fundingAddressForUtxo({ source: 'taproot' }, wallet),
+    ).toBe(taprootAddress);
+    expect(
+      fundingAddressForUtxo({ source: 'payment', address: paymentAddress }, wallet),
+    ).toBe(paymentAddress);
+
+    const resolved = fundingAddressForUtxo({ source: 'payment' }, wallet);
+    expect(isNestedSegwitAddress(resolved)).toBe(true);
+    expect(isTaprootAddress(resolved)).toBe(false);
   });
 
   it('sizes nested-segwit change differently from native', () => {
