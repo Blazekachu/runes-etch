@@ -93,4 +93,53 @@ describe('mempool provider fallback (#5)', () => {
     expect(calls.some((c) => c.includes('mempool.emzy.de') && c.includes('/txs/chain'))).toBe(true);
     expect(calls.some((c) => c.includes('mempool.space'))).toBe(false);
   });
+
+  it('falls back on provider rate-limit 429', async () => {
+    const calls: string[] = [];
+    global.fetch = vi.fn(async (url: string | URL) => {
+      const u = url.toString();
+      calls.push(u);
+      if (u.includes('mempool.emzy.de/signet/api/address/') && u.endsWith('/utxo')) {
+        return new Response('rate limited', { status: 429 });
+      }
+      if (u.includes('memepool.space/signet/api/address/') && u.endsWith('/utxo')) {
+        return new Response('[]', { status: 200 });
+      }
+      if (u.includes('mempool.space/signet/api/address/') && u.endsWith('/utxo')) {
+        return new Response('[]', { status: 200 });
+      }
+      throw new Error('unmocked: ' + u);
+    }) as unknown as typeof fetch;
+
+    await setMempoolNetwork('signet');
+    const utxos = await fetchUtxos(TADDR);
+    expect(utxos).toEqual([]);
+    expect(calls.some((c) => c.includes('mempool.emzy.de') && c.endsWith('/utxo'))).toBe(true);
+    expect(calls.some((c) => c.includes('memepool.space') && c.endsWith('/utxo'))).toBe(true);
+  });
+
+  it('mainnet also falls back to memepool.space on 429', async () => {
+    const calls: string[] = [];
+    const mainAddr = 'bc1pt6e3x6k9h4xys6wmw9q0df2f6z9m6m8qf3r7p2mjj4jvs2w8wwgq9f0t5y';
+    global.fetch = vi.fn(async (url: string | URL) => {
+      const u = url.toString();
+      calls.push(u);
+      if (u.includes('mempool.emzy.de/api/address/') && u.endsWith('/utxo')) {
+        return new Response('rate limited', { status: 429 });
+      }
+      if (u.includes('memepool.space/api/address/') && u.endsWith('/utxo')) {
+        return new Response('[]', { status: 200 });
+      }
+      if (u.includes('mempool.space/api/address/') && u.endsWith('/utxo')) {
+        return new Response('[]', { status: 200 });
+      }
+      throw new Error('unmocked: ' + u);
+    }) as unknown as typeof fetch;
+
+    await setMempoolNetwork('mainnet');
+    const utxos = await fetchUtxos(mainAddr);
+    expect(utxos).toEqual([]);
+    expect(calls.some((c) => c.includes('mempool.emzy.de/api/address/') && c.endsWith('/utxo'))).toBe(true);
+    expect(calls.some((c) => c.includes('memepool.space/api/address/') && c.endsWith('/utxo'))).toBe(true);
+  });
 });

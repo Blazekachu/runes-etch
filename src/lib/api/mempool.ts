@@ -36,6 +36,7 @@ const EMZY_SIGNET = 'https://mempool.emzy.de/signet/api';
 const EMZY_TESTNET4 = 'https://mempool.emzy.de/testnet4/api';
 const EMZY_TESTNET3 = 'https://mempool.emzy.de/testnet/api';
 const MEMEPOOL_MAINNET = 'https://memepool.space/api';
+const MEMEPOOL_SIGNET = 'https://memepool.space/signet/api';
 const BLOCKSTREAM_MAINNET = 'https://blockstream.info/api';
 const BLOCKSTREAM_SIGNET = 'https://blockstream.info/signet/api';
 
@@ -46,7 +47,7 @@ const ESPLORA_REGTEST = (
 const PROVIDERS: Record<MempoolChainId | 'mainnet', string[]> = {
   mainnet: [EMZY_MAINNET, MEMEPOOL_MAINNET, MEMPOOL_MAINNET, BLOCKSTREAM_MAINNET],
   bitcoin: [EMZY_MAINNET, MEMEPOOL_MAINNET, MEMPOOL_MAINNET, BLOCKSTREAM_MAINNET],
-  signet: [EMZY_SIGNET, MEMPOOL_SIGNET, BLOCKSTREAM_SIGNET],
+  signet: [EMZY_SIGNET, MEMEPOOL_SIGNET, MEMPOOL_SIGNET, BLOCKSTREAM_SIGNET],
   regtest: [ESPLORA_REGTEST],
   // Legacy testnet4 providers — kept so ord `/status` chain=testnet4 still resolves
   // correctly if an old indexer response is seen during migration.
@@ -75,9 +76,9 @@ let preferredProviderIdx = 0;
 const FAST_FAILOVER_MS = 4_000;
 
 /** Try each base (starting from the last-good one) until one returns without a
- *  network error or 5xx. 4xx responses are returned as-is — callers like
- *  fetchUtxos depend on seeing a 400 (too-many-utxos -> /txs walk), and a 4xx is
- *  a real answer, not a provider outage. Remembers the working provider. */
+ *  network error, 5xx, or rate-limit 429. A 400 is returned as-is because
+ *  fetchUtxos depends on it (too-many-utxos -> /txs walk). Remembers the
+ *  working provider. */
 async function tryProviders(bases: string[], path: string, init?: RequestInit, timeoutMs = FETCH_TIMEOUT_MS): Promise<Response> {
   const list = bases.length ? bases : [MEMPOOL_MAINNET];
   let lastErr: unknown;
@@ -89,7 +90,11 @@ async function tryProviders(bases: string[], path: string, init?: RequestInit, t
       : Math.min(timeoutMs, FAST_FAILOVER_MS);
     try {
       const res = await fetchWithTimeout(`${list[idx]}${path}`, init, attemptTimeout);
-      if (res.status >= 500 && !isLast) { lastErr = new Error(`${list[idx]} -> ${res.status}`); continue; }
+      // Provider outage or throttle: try the next mirror.
+      if ((res.status >= 500 || res.status === 429) && !isLast) {
+        lastErr = new Error(`${list[idx]} -> ${res.status}`);
+        continue;
+      }
       preferredProviderIdx = idx;
       return res;
     } catch (err) {
