@@ -61,7 +61,7 @@ describe('reveal vanity template vs signed TXID', () => {
       inscriptionFile: null,
       delegateId: null,
       parentInscription: null,
-      fundingUtxos: [{ txid: 'd'.repeat(64), vout: 0, value: 50_000, address: p2shAddress }],
+      fundingUtxos: [{ txid: 'd'.repeat(64), vout: 0, value: 50_000, status: { confirmed: true }, address: p2shAddress }],
       feeRate: 2,
       changeAddress: p2shAddress,
       internalPubkey,
@@ -121,7 +121,7 @@ describe('reveal vanity template vs signed TXID', () => {
       inscriptionFile: null,
       delegateId: null,
       parentInscription: null,
-      fundingUtxos: [{ txid: 'd'.repeat(64), vout: 0, value: 50_000, address: p2shAddress }],
+      fundingUtxos: [{ txid: 'd'.repeat(64), vout: 0, value: 50_000, status: { confirmed: true }, address: p2shAddress }],
       feeRate: 2,
       changeAddress: p2shAddress,
       internalPubkey,
@@ -134,6 +134,7 @@ describe('reveal vanity template vs signed TXID', () => {
       txid: 'e'.repeat(64),
       vout: 1,
       value: 20_000,
+      status: { confirmed: true },
       address: p2shAddress,
     };
 

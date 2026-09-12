@@ -33,7 +33,7 @@ function buildCommit(kind: FundingKind, network: bitcoin.Network, locktime: numb
     inscriptionFile: null,
     delegateId: null,
     parentInscription: null,
-    fundingUtxos: [{ txid: 'a'.repeat(64), vout: 0, value: 500_000, address: fundAddress }],
+    fundingUtxos: [{ txid: 'a'.repeat(64), vout: 0, value: 500_000, status: { confirmed: true }, address: fundAddress }],
     feeRate: 5,
     changeAddress: paymentAddress,
     internalPubkey: ordinalsKey,
