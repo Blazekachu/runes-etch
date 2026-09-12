@@ -9,6 +9,7 @@ import { buildTapscript, buildBareTapscript } from '@/lib/runes/inscription';
 import { runeNameToCommitmentBytes } from '@/lib/runes/names';
 import { formatLockedNameWarning, getRevealNameGate, type RevealNameGate } from '@/lib/runes/revealNameGate';
 import { canBroadcastRevealAtCurrentConfirmations, getFreshRevealNameGate, REVEAL_BROADCAST_CONFIRMATIONS } from '@/lib/runes/revealSafety';
+import { resolveRevealChangeAddress } from '@/lib/runes/revealChangeAddress';
 import { signPsbt, connectWallet, getActiveProvider } from '@/lib/wallet/xverse';
 import { walletToPsbtKeys } from '@/lib/wallet/psbtKeys';
 import { broadcastTx, fetchFeeRates, getTxConfirmations, fetchUtxos, setMempoolNetwork, bitcoinNetworkForWallet } from '@/lib/api/mempool';
@@ -304,10 +305,7 @@ export default function RevealPhase(_props?: Record<string, unknown>) {
         additionalFundingUtxos: [],
         feeRate: selectedFeeRate,
         receiverAddress: wallet.taprootAddress,
-        // #12: prefer payment (segwit) over taproot for change. The old
-        // `commitState.changeAddress || wallet.taprootAddress` chain skipped
-        // segwit entirely when commitState.changeAddress was blank (bundle resume).
-        changeAddress: commitState.changeAddress || wallet.paymentAddress || wallet.taprootAddress,
+        changeAddress: resolveRevealChangeAddress(commitState.changeAddress, wallet.paymentAddress, wallet.taprootAddress),
         vanityNonce: new Uint8Array(0),
         psbtKeys: walletToPsbtKeys(wallet, internalPubkey),
         locktime: vanityLocktime ?? 0,

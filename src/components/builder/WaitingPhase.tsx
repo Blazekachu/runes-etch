@@ -12,6 +12,7 @@ import { createCommitBundle, downloadBundle } from '@/lib/bundle/export';
 import { buildTapscript, buildBareTapscript } from '@/lib/runes/inscription';
 import { runeNameToCommitmentBytes } from '@/lib/runes/names';
 import { buildRevealTx, serializeForTxid } from '@/lib/runes/reveal';
+import { resolveRevealChangeAddress } from '@/lib/runes/revealChangeAddress';
 import { resolveParentInscription } from '@/lib/runes/resolveParent';
 import { formatLockedNameWarning, getRevealNameGate } from '@/lib/runes/revealNameGate';
 import { REVEAL_BROADCAST_CONFIRMATIONS } from '@/lib/runes/revealSafety';
@@ -234,7 +235,7 @@ export default function WaitingPhase() {
           feeRate: selectedFeeRate,
           receiverAddress: wallet.taprootAddress,
           // #12: payment (segwit) over taproot for reveal change.
-          changeAddress: commitState?.changeAddress || wallet.paymentAddress || wallet.taprootAddress,
+          changeAddress: resolveRevealChangeAddress(commitState?.changeAddress, wallet.paymentAddress, wallet.taprootAddress),
           vanityNonce: new Uint8Array(0),
           psbtKeys: walletToPsbtKeys(wallet, internalPubkey),
           network: btcNetwork,
@@ -261,7 +262,7 @@ export default function WaitingPhase() {
         additionalFundingUtxos: [],
         feeRate: selectedFeeRate,
         receiverAddress: wallet.taprootAddress,
-        changeAddress: commitState?.changeAddress || wallet.taprootAddress,
+        changeAddress: resolveRevealChangeAddress(commitState?.changeAddress, wallet.paymentAddress, wallet.taprootAddress),
         vanityNonce: new Uint8Array(0),
         psbtKeys: walletToPsbtKeys(wallet, internalPubkey),
         network: btcNetwork,

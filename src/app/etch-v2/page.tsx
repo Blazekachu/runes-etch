@@ -22,6 +22,8 @@ import WaitingPhase from '@/components/builder/WaitingPhase';
 import RevealPhase from '@/components/builder/RevealPhase';
 import CompletePhase from '@/components/builder/CompletePhase';
 
+const MAX_BUNDLE_UPLOAD_BYTES = 2 * 1024 * 1024;
+
 export default function EtchV2Page() {
   const phase = useBuilderStore((s) => s.phase);
   const wallet = useBuilderStore((s) => s.wallet);
@@ -69,6 +71,11 @@ export default function EtchV2Page() {
   function handleBundleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (file.size > MAX_BUNDLE_UPLOAD_BYTES) {
+      alert('Bundle file is too large. Max supported size is 2 MB.');
+      e.target.value = '';
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (ev) => {
       const text = ev.target?.result as string;
@@ -80,6 +87,7 @@ export default function EtchV2Page() {
       loadFromBundle(bundle);
     };
     reader.readAsText(file);
+    e.target.value = '';
   }
 
   return (

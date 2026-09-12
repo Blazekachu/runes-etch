@@ -2,6 +2,7 @@ import type {
   CommitBundle, BundleValidation, CommitTxState,
   RuneEtching, InscriptionFile, ParentInscription,
 } from '@/types';
+import { MAX_INSCRIPTION_SIZE } from '@/types';
 import { fetchUtxos, getCurrentBlockHeight } from '@/lib/api/mempool';
 import { getRuneNameStatus, resolveParentForReveal } from '@/lib/api/ordinals';
 import * as bitcoin from 'bitcoinjs-lib';
@@ -12,8 +13,11 @@ bitcoin.initEccLib(ecc);
 const HEX64_RE = /^[0-9a-f]{64}$/i;
 const HEX_RE = /^[0-9a-f]+$/i;
 const RUNE_NAME_RE = /^[A-Z]+$/;
+const MAX_BUNDLE_JSON_CHARS = 2_000_000;
+const MAX_BUNDLE_BASE64_CHARS = 550_000;
 
 export function parseBundle(jsonString: string): CommitBundle | null {
+  if (jsonString.length > MAX_BUNDLE_JSON_CHARS) return null;
   try {
     const data = JSON.parse(jsonString);
     // H5: Thorough validation of bundle fields
@@ -31,6 +35,7 @@ export function parseBundle(jsonString: string): CommitBundle | null {
     if (typeof data.commitOutputIndex !== 'number' || data.commitOutputIndex < 0) return null;
     if (typeof data.commitOutputValue !== 'number' || data.commitOutputValue <= 0) return null;
     if (typeof data.targetUnlockHeight !== 'number') return null;
+    if (!Number.isFinite(data.targetUnlockHeight)) return null;
 
     // Etching object
     if (!data.etching || typeof data.etching !== 'object') return null;
@@ -40,6 +45,16 @@ export function parseBundle(jsonString: string): CommitBundle | null {
     // Optional delegate
     if (data.delegateInscriptionId !== null && data.delegateInscriptionId !== undefined) {
       if (typeof data.delegateInscriptionId !== 'string') return null;
+    }
+    if (data.parentInscriptionId !== null && data.parentInscriptionId !== undefined) {
+      if (typeof data.parentInscriptionId !== 'string') return null;
+    }
+    if (data.inscriptionFile !== null && data.inscriptionFile !== undefined) {
+      if (typeof data.inscriptionFile !== 'object') return null;
+      const inscription = data.inscriptionFile as { contentType?: unknown; bodyBase64?: unknown };
+      if (typeof inscription.contentType !== 'string') return null;
+      if (typeof inscription.bodyBase64 !== 'string') return null;
+      if (inscription.bodyBase64.length > MAX_BUNDLE_BASE64_CHARS) return null;
     }
 
     return data as CommitBundle;
@@ -217,7 +232,13 @@ function hexToBytes(hex: string): Uint8Array {
 }
 
 function base64ToUint8(b64: string): Uint8Array {
+  if (b64.length > MAX_BUNDLE_BASE64_CHARS) {
+    throw new Error('Bundle inscription payload is too large');
+  }
   const binary = atob(b64);
+  if (binary.length > MAX_INSCRIPTION_SIZE) {
+    throw new Error('Bundle inscription payload exceeds supported inscription size');
+  }
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i);

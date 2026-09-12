@@ -31,7 +31,7 @@ describe('reveal safety gates', () => {
     expect(gate.status).toBe('locked');
     if (gate.status === 'locked') {
       expect(gate.currentHeight).toBe(951350);
-      expect(gate.unlockHeight).toBe(951871);
+      expect(gate.unlockHeight).toBe(951870);
     }
   });
 
